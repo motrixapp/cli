@@ -9,6 +9,7 @@ export const EXIT = {
   NETWORK: 3,
   AUTH: 4,
   SERVER: 5,
+  NOT_INSTALLED: 6,
 } as const
 
 export type ExitCode = (typeof EXIT)[keyof typeof EXIT]
