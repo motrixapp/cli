@@ -9,7 +9,7 @@ description: Use when you need to drive a Motrix download manager from the comma
 
 ## When to use
 
-Reach for `motrix` whenever the task involves a Motrix download: enumerating or filtering tasks, starting a download, controlling a task's lifecycle, or streaming progress. If Motrix isn't running (or unreachable), commands fail fast with exit code `3` — surface that rather than retrying blindly.
+Reach for `motrix` whenever the task involves a Motrix download: enumerating or filtering tasks, starting a download, controlling a task's lifecycle, or streaming progress. If Motrix isn't running (or unreachable), commands fail fast with exit code `3` — surface that rather than retrying blindly. If Motrix isn't running, run `motrix open` first to launch the local desktop app (exit `6` if it isn't installed), then retry.
 
 ## Setup / connection
 
@@ -27,12 +27,14 @@ Reach for `motrix` whenever the task involves a Motrix download: enumerating or 
   - `3` network — the bridge is down / unreachable
   - `4` auth — token missing or rejected (re-run `motrix pair`)
   - `5` server error — the bridge returned a JSON-RPC error
+  - `6` not-installed — the Motrix desktop app could not be launched (`motrix open`)
 
 ## Commands
 
 ```bash
 motrix list [--status <s>] [--limit <n>] [--offset <n>]   # list tasks
 motrix stats                                              # aggregate speeds + counts
+motrix open [--timeout <ms>]                              # launch the local desktop app + wait for its bridge
 motrix add <url...> --save-dir <dir> [--filename <name>]  # add http(s)/ftp download(s)
 motrix add --magnet <uri> --save-dir <dir> [--select 0,2] # add a magnet
 motrix add --torrent <file.torrent> --save-dir <dir>      # add a .torrent
