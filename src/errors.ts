@@ -1,7 +1,7 @@
 /**
  * CLI exit-code contract — the stable surface an AI agent (or a shell script)
  * branches on. Mirrors the spec: 0 ok · 2 usage · 3 network (bridge down) ·
- * 4 auth (401/403) · 5 server error.
+ * 4 auth (401/403) · 5 server error · 6 not-installed (motrix open).
  */
 export const EXIT = {
   OK: 0,
