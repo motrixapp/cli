@@ -45,6 +45,7 @@ motrix watch --stats                                   # stream live progress un
 |---------|---------|
 | `motrix list [--status <s>] [--limit <n>] [--offset <n>]` | List download tasks |
 | `motrix stats` | Aggregate speeds and task counts |
+| `motrix open [--timeout <ms>]` | Launch the local desktop app and wait until its bridge is ready |
 | `motrix add <url...> --save-dir <dir> [--filename <name>] [--header "K: V"] [--connections <n>] [--proxy <url>]` | Add HTTP(S) / FTP download(s) |
 | `motrix add --magnet <uri> --save-dir <dir> [--select 0,2]` | Add a magnet link |
 | `motrix add --torrent <file.torrent> --save-dir <dir>` | Add a `.torrent` file |
@@ -96,6 +97,7 @@ Scripts and agents should branch on the **exit code**:
 | `3` | Network — the bridge is down or unreachable |
 | `4` | Auth — token missing or rejected (re-run `motrix pair`) |
 | `5` | Server — the bridge returned a JSON-RPC error |
+| `6` | Not installed — the Motrix desktop app could not be launched (`motrix open`) |
 
 **Version drift.** If the target Motrix does not recognize a method this CLI
 sends (JSON-RPC `-32601`), or exposes no `/mdxp` bridge at all (HTTP 404), the
