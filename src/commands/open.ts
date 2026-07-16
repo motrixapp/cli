@@ -24,6 +24,7 @@ export interface OpenDeps {
 
 export type OpenReason =
   | 'remote_endpoint'
+  | 'invalid_timeout'
   | 'not_installed'
   | 'launch_timeout'
   | 'opener_missing'
@@ -56,6 +57,20 @@ export async function runOpen(
       waitedMs: 0,
       message:
         'open only launches the local desktop app; a remote --endpoint cannot be launched',
+    }
+  }
+
+  // A non-positive timeout would make the readiness loop "expire" on its first
+  // check — reporting a misleading launch_timeout for what is really bad input.
+  if (opts.timeout !== undefined && opts.timeout <= 0) {
+    return {
+      ok: false,
+      reason: 'invalid_timeout',
+      exitCode: EXIT.USAGE,
+      alreadyRunning: false,
+      launched: false,
+      waitedMs: 0,
+      message: '--timeout must be a positive number of milliseconds',
     }
   }
 

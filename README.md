@@ -20,7 +20,8 @@ the actual downloading is performed by Motrix.
 ## Installation
 
 ```bash
-npm i -g @motrix/cli   # installs the `motrix` command globally
+# installs the `motrix` command globally
+npm i -g @motrix/cli
 motrix --help
 ```
 

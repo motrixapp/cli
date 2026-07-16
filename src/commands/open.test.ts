@@ -31,6 +31,20 @@ describe('runOpen', () => {
     expect(d.probeBridge).not.toHaveBeenCalled()
   })
 
+  it('rejects a non-positive --timeout as a usage error, without launching', async () => {
+    for (const timeout of [0, -5]) {
+      const d = deps()
+      const r = await runOpen({ timeout }, d)
+      expect(r).toMatchObject({
+        ok: false,
+        reason: 'invalid_timeout',
+        exitCode: EXIT.USAGE,
+      })
+      expect(d.spawnOpener).not.toHaveBeenCalled()
+      expect(d.probeBridge).not.toHaveBeenCalled()
+    }
+  })
+
   it('reports already-running and does not wait when the bridge is up', async () => {
     const d = deps({ probeBridge: vi.fn().mockResolvedValue(READY) })
     const r = await runOpen({}, d)

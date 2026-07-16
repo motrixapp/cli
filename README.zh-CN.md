@@ -18,7 +18,8 @@ CLI 是**客户端，而非下载引擎**——它自己不下载任何东西。
 ## 安装
 
 ```bash
-npm i -g @motrix/cli   # 全局安装 `motrix` 命令
+# 全局安装 `motrix` 命令
+npm i -g @motrix/cli
 motrix --help
 ```
 
