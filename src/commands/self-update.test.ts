@@ -64,6 +64,19 @@ describe('runSelfUpdate — guards and refusals', () => {
     expect(r.manualCommand).toContain('npm install -g @motrix/cli')
   })
 
+  it('fails with unknown-install when the install path matches no known cascade fragment', async () => {
+    const c = ctx({
+      argv1: '/opt/odd/node_modules/@motrix/cli/dist/bin/motrix.js',
+    })
+    const r = await runSelfUpdate({}, c)
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'unknown-install',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+    })
+    expect(r.manualCommand).toContain('npm install -g @motrix/cli')
+  })
+
   it('refuses npx runs with exit 7 and a manual command, without installing', async () => {
     const c = ctx({
       argv1:
@@ -148,6 +161,26 @@ describe('runSelfUpdate — guards and refusals', () => {
       ok: false,
       reason: 'resolve-failed',
       exitCode: EXIT.NETWORK,
+    })
+  })
+
+  it('maps EINVALIDTAGNAME from npm view to bad-target during resolve', async () => {
+    const r = await runSelfUpdate(
+      { target: '.bad.' },
+      ctx({
+        runCommand: scriptedRun({
+          view: {
+            code: 1,
+            stdout: '',
+            stderr: 'npm error code EINVALIDTAGNAME\n',
+          },
+        }),
+      })
+    )
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'bad-target',
+      exitCode: EXIT.USAGE,
     })
   })
 })
@@ -272,5 +305,20 @@ describe('runSelfUpdate — install and verify', () => {
     const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'volta' })
     expect(r.warning).toBeDefined()
+  })
+
+  it('updates via bun with the bun installer args', async () => {
+    const c = ctx({
+      argv1:
+        '/Users/x/.bun/install/global/node_modules/@motrix/cli/dist/bin/motrix.js',
+      whichBin: async () => null,
+    })
+    const r = await runSelfUpdate({}, c)
+    expect(r).toMatchObject({ ok: true, changed: true, method: 'bun-global' })
+    expect(c.runCommand).toHaveBeenCalledWith(
+      'bun',
+      ['add', '-g', '@motrix/cli@0.3.0'],
+      { cwd: '/tmp' }
+    )
   })
 })
