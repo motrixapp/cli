@@ -9,12 +9,14 @@ import {
   runResume,
 } from './commands/lifecycle'
 import { type ListOpts, runList } from './commands/list'
+import { defaultOpenDeps, runOpen } from './commands/open'
 import { type PairOpts, runPair } from './commands/pair'
 import { runSkillInstall, runSkillPath } from './commands/skill'
 import { runStats } from './commands/stats'
 import { runWatch, type WatchOpts } from './commands/watch'
 import { discoverBaseUrl, discoverEndpoint } from './discovery'
 import { CliError, EXIT, type ExitCode } from './errors'
+import { wantsJson } from './output'
 
 interface GlobalOpts {
   endpoint?: string
@@ -87,6 +89,34 @@ export function buildProgram(): Command {
     .action(async () => {
       const io = await ioFromGlobals(program.opts<GlobalOpts>())
       await runStats(io)
+    })
+
+  program
+    .command('open')
+    .description(
+      'Launch the local desktop Motrix and wait until its bridge is ready.'
+    )
+    .option(
+      '--timeout <ms>',
+      'ms to wait for the bridge after launching',
+      intArg
+    )
+    .action(async (opts: { timeout?: number }) => {
+      // NOTE: `open` deliberately does NOT use ioFromGlobals/discoverEndpoint —
+      // those throw EXIT.NETWORK when the bridge is down, the case open handles.
+      const global = program.opts<GlobalOpts>()
+      const result = await runOpen(
+        { timeout: opts.timeout, endpoint: global.endpoint },
+        defaultOpenDeps()
+      )
+      if (wantsJson({ json: global.json }, process.stdout)) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+      } else if (result.ok) {
+        process.stdout.write(`${result.message}\n`)
+      } else {
+        process.stderr.write(`motrix: ${result.message}\n`)
+      }
+      process.exitCode = result.exitCode
     })
 
   program
