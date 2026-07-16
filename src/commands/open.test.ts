@@ -1,6 +1,9 @@
+import { readFile } from 'node:fs/promises'
 import { describe, expect, it, vi } from 'vitest'
 import { EXIT } from '../errors'
-import { isValidPort, type OpenDeps, runOpen } from './open'
+import { defaultProbeBridge, isValidPort, type OpenDeps, runOpen } from './open'
+
+vi.mock('node:fs/promises', () => ({ readFile: vi.fn() }))
 
 const READY = 'http://127.0.0.1:16800'
 
@@ -121,9 +124,48 @@ describe('runOpen', () => {
   })
 })
 
+describe('defaultProbeBridge', () => {
+  it('resolves to null when endpoint.json is missing', async () => {
+    vi.mocked(readFile).mockRejectedValue(new Error('ENOENT'))
+    await expect(defaultProbeBridge()).resolves.toBeNull()
+  })
+
+  it('resolves to null when endpoint.json content is the literal null', async () => {
+    vi.mocked(readFile).mockResolvedValue('null')
+    await expect(defaultProbeBridge()).resolves.toBeNull()
+  })
+
+  it('resolves to null when endpoint.json is malformed JSON', async () => {
+    vi.mocked(readFile).mockResolvedValue('{ not json')
+    await expect(defaultProbeBridge()).resolves.toBeNull()
+  })
+
+  it('resolves to null when the port is invalid', async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ port: 70000, pid: 1 })
+    )
+    await expect(defaultProbeBridge()).resolves.toBeNull()
+  })
+
+  it('resolves to null when the pid is stale', async () => {
+    vi.mocked(readFile).mockResolvedValue(
+      JSON.stringify({ port: 16800, pid: 2147483646 })
+    )
+    await expect(defaultProbeBridge()).resolves.toBeNull()
+  })
+})
+
 describe('isValidPort', () => {
   it('accepts a real port', () => {
     expect(isValidPort(16800)).toBe(true)
+  })
+
+  it('accepts the lowest valid port', () => {
+    expect(isValidPort(1)).toBe(true)
+  })
+
+  it('accepts the highest valid port', () => {
+    expect(isValidPort(65535)).toBe(true)
   })
 
   it('rejects 0', () => {
@@ -136,6 +178,10 @@ describe('isValidPort', () => {
 
   it('rejects a port above 65535', () => {
     expect(isValidPort(70000)).toBe(false)
+  })
+
+  it('rejects one past the highest valid port', () => {
+    expect(isValidPort(65536)).toBe(false)
   })
 
   it('rejects a non-integer port', () => {

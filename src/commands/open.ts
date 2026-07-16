@@ -163,7 +163,7 @@ export function isValidPort(port: unknown): port is number {
 
 /** Default probe: endpoint.json present + pid alive + port accepting TCP. */
 export async function defaultProbeBridge(): Promise<string | null> {
-  let file: EndpointFile
+  let file: EndpointFile | null
   try {
     const raw = await readFile(
       endpointFilePath(process.platform, process.env, homedir()),
@@ -173,6 +173,7 @@ export async function defaultProbeBridge(): Promise<string | null> {
   } catch {
     return null
   }
+  if (!file) return null
   if (!isValidPort(file.port) || !file.pid || !isPidAlive(file.pid)) return null
   const up = await tcpConnectable('127.0.0.1', file.port)
   return up ? `http://127.0.0.1:${file.port}` : null
