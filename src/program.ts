@@ -11,6 +11,7 @@ import {
 import { type ListOpts, runList } from './commands/list'
 import { defaultOpenDeps, runOpen } from './commands/open'
 import { type PairOpts, runPair } from './commands/pair'
+import { defaultSelfUpdateCtx, runSelfUpdate } from './commands/self-update'
 import { runSkillInstall, runSkillPath } from './commands/skill'
 import { runStats } from './commands/stats'
 import { runWatch, type WatchOpts } from './commands/watch'
@@ -114,6 +115,30 @@ export function buildProgram(): Command {
       const result = await runOpen(
         { timeout: opts.timeout, endpoint: global.endpoint },
         defaultOpenDeps()
+      )
+      if (wantsJson({ json: global.json }, process.stdout)) {
+        process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+      } else if (result.ok) {
+        process.stdout.write(`${result.message}\n`)
+      } else {
+        process.stderr.write(`motrix: ${result.message}\n`)
+      }
+      process.exitCode = result.exitCode
+    })
+
+  program
+    .command('self-update')
+    .description(
+      'Update this CLI to the latest (or a given) published version.'
+    )
+    .argument('[target]', 'version, range, or dist-tag (default: latest)')
+    .option('--dry-run', 'show what would run without changing anything')
+    .action(async (target: string | undefined, opts: { dryRun?: boolean }) => {
+      // Like `open`, self-update needs no bridge — never touches ioFromGlobals.
+      const global = program.opts<GlobalOpts>()
+      const result = await runSelfUpdate(
+        { target, dryRun: opts.dryRun },
+        defaultSelfUpdateCtx()
       )
       if (wantsJson({ json: global.json }, process.stdout)) {
         process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
