@@ -116,7 +116,7 @@ export function resolveEndpoint(
 
 /** Default liveness probe: signal 0 throws ESRCH if the pid is gone; EPERM
  *  means it exists but is owned by another user (still alive). */
-function isPidAlive(pid: number): boolean {
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
