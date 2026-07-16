@@ -167,6 +167,10 @@ sudo**。
 每个 `7` 的 payload 都带 `manualCommand`;人类可读消息以
 "You can run it manually: `<cmd>`" 结尾。
 
+`3` 里有一个细微差别:"npm 本身未安装"也归入 `3`(`resolve-failed`),
+但与瞬时网络错误不同,它不会因重试而痊愈——message 会明说
+("install npm or update manually")。
+
 ## 输出
 
 - **TTY** — 一行:`Updated @motrix/cli 0.2.1 → 0.3.0 (pnpm)` /
@@ -175,14 +179,14 @@ sudo**。
 
   ```json
   { "ok": true, "changed": true, "from": "0.2.1", "to": "0.3.0",
-    "method": "pnpm-global", "command": "pnpm add -g @motrix/cli@0.3.0",
-    "warning": null }
+    "method": "pnpm-global", "command": "pnpm add -g @motrix/cli@0.3.0" }
   ```
 
   无操作:`{ "ok": true, "changed": false, "reason": "already-up-to-date",
-  "from": "0.2.1", "to": "0.2.1" }`——统一形状,每种结果都带 `from`/`to`。
-  dry run 追加 `"dryRun": true`(安装命令仍走同一个 `command` 字段)。
-  失败结果带 `reason` + `manualCommand`。
+  "from": "0.2.1", "to": "0.2.1" }`——单一形状;不适用的字段(`warning`、
+  `method` 等)直接省略而非输出 `null`,`from`/`to` 在两个版本都已知时出现
+  (解析之前就拒绝的分支两者皆无)。dry run 追加 `"dryRun": true`(安装命令
+  仍走同一个 `command` 字段)。失败结果带 `reason` + `manualCommand`。
 
 ## 注意事项
 
