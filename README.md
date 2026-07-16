@@ -57,9 +57,10 @@ motrix watch --stats                                   # stream live progress un
 | `motrix pair [--name <label>]` | Pair with a bridge via device code |
 | `motrix describe` | Print the MDXP tool catalog |
 | `motrix skill path \| install [dir]` | Locate / install the bundled agent skill |
+| `motrix self-update [target] [--dry-run]` | Update this CLI itself via the package manager that installed it |
 
 Every command also accepts the global flags `--endpoint <url>`, `--token
-<token>`, and `--json`.
+<token>`, and `--json`. `motrix --version` prints the CLI version.
 
 ## Connecting to Motrix
 
@@ -99,6 +100,7 @@ Scripts and agents should branch on the **exit code**:
 | `4` | Auth — token missing or rejected (re-run `motrix pair`) |
 | `5` | Server — the bridge returned a JSON-RPC error |
 | `6` | Not installed — the Motrix desktop app could not be launched (`motrix open`) |
+| `7` | Self-update failed — unsupported install source, installer error, or verification mismatch (`motrix self-update`) |
 
 **Version drift.** If the target Motrix does not recognize a method this CLI
 sends (JSON-RPC `-32601`), or exposes no `/mdxp` bridge at all (HTTP 404), the

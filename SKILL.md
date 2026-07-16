@@ -28,6 +28,7 @@ Reach for `motrix` whenever the task involves a Motrix download: enumerating or 
   - `4` auth — token missing or rejected (re-run `motrix pair`)
   - `5` server error — the bridge returned a JSON-RPC error
   - `6` not-installed — the Motrix desktop app could not be launched (`motrix open`)
+  - `7` self-update failed — this environment can't self-update (npx / checkout / unknown install source) or the installer failed; don't retry, run the printed manual command instead
 
 ## Commands
 
@@ -45,6 +46,7 @@ motrix watch [--task <id>] [--stats]                      # stream progress (NDJ
 motrix pair [--name <label>]                              # device-code pair with a bridge
 motrix describe                                           # print the MDXP tool catalog
 motrix skill path | install [dir]                         # locate / install this skill
+motrix self-update [target] [--dry-run]                   # update this CLI itself (exit 7 = can't update here)
 ```
 
 All commands accept the global `--endpoint` / `--token` / `--json` flags.
