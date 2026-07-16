@@ -35,21 +35,25 @@ export function escapeForCmdShell(arg: string): string {
  * piped stdio reads as a hang — captured output is printed only on failure.
  * On win32 the package-manager entry points are `.cmd` shims, which Node
  * refuses to spawn without a shell (EINVAL, CVE-2024-27980), so a shell is
- * used there; args are cmd.exe-quoted (`escapeForCmdShell`) before being
- * handed to `spawn` so that paths with spaces and `^`-containing ranges
- * survive cmd.exe's own parsing — `cmd` itself is left alone since our
- * commands are always bare names (`npm`, `node`, ...). A shell also means
- * spawn failures surface as a non-zero exit instead of `code: null` on
- * win32.
+ * used there; `cmd` and every element of `args` are cmd.exe-quoted
+ * (`escapeForCmdShell`) before being handed to `spawn` so that paths with
+ * spaces (including `cmd` itself — e.g. the default Windows install path
+ * `C:\Program Files\nodejs\node.exe`) and `^`-containing ranges survive
+ * cmd.exe's own parsing. A shell also means spawn failures surface as a
+ * non-zero exit instead of `code: null` on win32.
  */
 export const runCommand: RunCommand = (cmd, args, opts) =>
   new Promise((resolve) => {
     const useShell = process.platform === 'win32'
-    const child = spawn(cmd, useShell ? args.map(escapeForCmdShell) : args, {
-      cwd: opts?.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      shell: useShell,
-    })
+    const child = spawn(
+      useShell ? escapeForCmdShell(cmd) : cmd,
+      useShell ? args.map(escapeForCmdShell) : args,
+      {
+        cwd: opts?.cwd,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        shell: useShell,
+      }
+    )
     let stdout = ''
     let stderr = ''
     child.stdout?.on('data', (d: Buffer) => {
