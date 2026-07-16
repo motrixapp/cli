@@ -19,6 +19,12 @@ describe('escapeForCmdShell', () => {
   it('leaves ^ unchanged inside the quotes (cmd.exe treats it literally there)', () => {
     expect(escapeForCmdShell('^0.2.0')).toBe('"^0.2.0"')
   })
+
+  it('quotes the command itself the same way (e.g. the default Windows node.exe path)', () => {
+    expect(escapeForCmdShell('C:\\Program Files\\nodejs\\node.exe')).toBe(
+      '"C:\\Program Files\\nodejs\\node.exe"'
+    )
+  })
 })
 
 describe('runCommand', () => {
