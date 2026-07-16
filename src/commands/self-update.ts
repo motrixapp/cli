@@ -1,5 +1,5 @@
 import { access, realpath } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { EXIT, type ExitCode } from '../errors'
 import {
@@ -34,7 +34,9 @@ export type SelfUpdateReason =
 export interface SelfUpdateResult {
   ok: boolean
   exitCode: ExitCode
-  /** True only when a new version was actually installed. */
+  /** True when the installer mutated the global tree (a new version was
+   *  installed). This can be true while `ok` is false: the install succeeded
+   *  but post-install verification could not confirm the result. */
   changed: boolean
   reason?: SelfUpdateReason
   dryRun?: boolean
@@ -57,7 +59,13 @@ export interface SelfUpdateCtx {
   execPath: string
   realpath: (p: string) => Promise<string>
   runCommand: RunCommand
-  tmpdir: string
+  /** A user-owned neutral working directory for package-manager subprocesses.
+   *  NOT a shared temp dir: a global operation must not read a hostile or
+   *  project-local `.npmrc`/`.yarnrc` from cwd or its ancestors (yarn walks
+   *  ancestors and honors `yarn-path`; `/tmp` is world-writable on Linux).
+   *  The user's own `~/.npmrc` is honored regardless of cwd, so a home dir
+   *  keeps global config while denying the shared-temp injection vector. */
+  neutralDir: string
   /** Resolve a bin name on PATH; null when absent (shadowing check). */
   whichBin: (name: string) => Promise<string | null>
 }
@@ -109,7 +117,7 @@ export async function runSelfUpdate(
     realpath: ctx.realpath,
     env: ctx.env,
     runCommand: ctx.runCommand,
-    tmpdir: ctx.tmpdir,
+    neutralDir: ctx.neutralDir,
   })
   if (!source.executable) {
     const reason: SelfUpdateReason =
@@ -118,19 +126,29 @@ export async function runSelfUpdate(
         : source.kind === 'unknown'
           ? 'unknown-install'
           : 'unsupported-ephemeral'
+    // For a genuinely unknown source we must NOT present npm as THE fix:
+    // if the CLI was actually installed by another manager, `npm i -g`
+    // creates a second, PATH-shadowing copy — the exact failure this whole
+    // command exists to prevent. Point the user at their own manager instead.
+    const message =
+      source.kind === 'unknown'
+        ? `${source.reason} — update it with the same tool you used to install it ` +
+          `(npm, pnpm, yarn, bun, or volta). Running \`${source.manualCommand}\` ` +
+          `blindly may create a second, PATH-shadowing copy.`
+        : `${source.reason}. You can run it manually: ${source.manualCommand}`
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
       changed: false,
       reason,
       manualCommand: source.manualCommand,
-      message: `${source.reason}. You can run it manually: ${source.manualCommand}`,
+      message,
     }
   }
 
   const resolved = await resolveTargetVersion(spec, {
     runCommand: ctx.runCommand,
-    tmpdir: ctx.tmpdir,
+    neutralDir: ctx.neutralDir,
     allowPnpmFallback: source.kind === 'pnpm-global',
   })
   if (!resolved.ok) {
@@ -188,7 +206,7 @@ export async function runSelfUpdate(
   }
 
   const inst = await ctx.runCommand(installArgs[0], installArgs.slice(1), {
-    cwd: ctx.tmpdir,
+    cwd: ctx.neutralDir,
   })
   if (inst.code !== 0) {
     const output = `${inst.stdout}${inst.stderr}`.trim()
@@ -216,16 +234,31 @@ export async function runSelfUpdate(
 
   const verified = await verifyInstall(source, to, ctx)
   if (!verified.ok) {
+    // The installer exited 0, so the global tree is ALREADY mutated — report
+    // that honestly (`changed: true`) rather than implying nothing happened.
+    // Recovery is a deliberate rollback to `from` via the SAME manager, not a
+    // blind re-run of the forward install (which would just reproduce this
+    // unverifiable state). We do NOT auto-rollback: verification can fail on a
+    // perfectly good install (e.g. a stale entry-path assumption), and
+    // downgrading a healthy install — plus a second fallible mutation — is
+    // worse than surfacing the state and the exact command.
+    const rollback = installArgsFor(source.kind, `${OWN_PACKAGE}@${from}`).join(
+      ' '
+    )
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
-      changed: false,
+      changed: true,
       reason: 'verify-failed',
       from,
       to,
       method: source.kind,
-      manualCommand: command,
-      message: `${verified.detail}. You can run it manually: ${command}`,
+      command,
+      manualCommand: rollback,
+      message:
+        `${verified.detail}. The installer reported success but the result could ` +
+        `not be verified — ${OWN_PACKAGE} may now be at ${to} or in a broken ` +
+        `state. Check \`motrix --version\`; to restore ${from}, run: ${rollback}`,
     }
   }
 
@@ -267,13 +300,15 @@ async function verifyInstall(
     const pm = source.kind === 'npm-global' ? 'npm' : 'pnpm'
     let root = source.globalRoot ?? null
     if (!root) {
-      const res = await ctx.runCommand(pm, ['root', '-g'], { cwd: ctx.tmpdir })
+      const res = await ctx.runCommand(pm, ['root', '-g'], {
+        cwd: ctx.neutralDir,
+      })
       root = res.code === 0 ? res.stdout.trim() || null : null
     }
     if (root) {
       const entry = join(root, '@motrix', 'cli', 'dist', 'bin', 'motrix.js')
       const res = await ctx.runCommand(ctx.execPath, [entry, '--version'], {
-        cwd: ctx.tmpdir,
+        cwd: ctx.neutralDir,
       })
       if (res.code === 0) {
         const got = res.stdout.trim()
@@ -295,7 +330,7 @@ async function verifyInstall(
         'could not find `motrix` on PATH to verify — open a new shell and check `motrix --version`',
     }
   }
-  const res = await ctx.runCommand(bin, ['--version'], { cwd: ctx.tmpdir })
+  const res = await ctx.runCommand(bin, ['--version'], { cwd: ctx.neutralDir })
   const got = res.code === 0 ? res.stdout.trim() : null
   if (got === expected) return { ok: true }
   return {
@@ -335,7 +370,10 @@ export function defaultSelfUpdateCtx(): SelfUpdateCtx {
     execPath: process.execPath,
     realpath: (p) => realpath(p),
     runCommand,
-    tmpdir: tmpdir(),
+    // Home is user-owned and outside shared /tmp, so no other local user can
+    // plant a hostile `.npmrc`/`.yarnrc` in cwd or an ancestor; the user's own
+    // `~/.npmrc` (registry/auth) is still honored.
+    neutralDir: homedir(),
     whichBin: defaultWhichBin,
   }
 }

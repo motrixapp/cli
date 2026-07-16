@@ -89,10 +89,15 @@ symlinks on POSIX). All inputs injectable (`argv1`, `realpath`, `env`,
 | 4 | not under any `node_modules/` | `checkout` | refuse — "running from a checkout; use git pull + pnpm build" |
 | 5 | `/.volta/` or `/Volta/` | `volta` | execute `volta install @motrix/cli@<v>` |
 | 6 | under `$PNPM_HOME`, or pnpm global fragments (`/.local/share/pnpm/`, `/Library/pnpm/`, `/AppData/Local/pnpm/`, `/.pnpm/global/`) | `pnpm-global` | execute `pnpm add -g @motrix/cli@<v>` |
-| 7 | `/.yarn/global/` | `yarn-global` | execute `yarn global add @motrix/cli@<v>` |
+| 7 | `/.config/yarn/global/` (Yarn Classic default), `/.yarn/global/`, or `/Yarn/Data/global/` (Windows) | `yarn-global` | execute `yarn global add @motrix/cli@<v>` |
 | 8 | `/.bun/install/global/` | `bun-global` | execute `bun add -g @motrix/cli@<v>` |
 | 9 | realpath is inside `npm root -g` (spawned, realpath-compared) | `npm-global` | execute `npm i -g @motrix/cli@<v>` |
-| 10 | nothing matched | `unknown` | refuse + print the `npm i -g` manual command |
+| 10 | nothing matched | `unknown` | refuse — do **not** present `npm i -g` as the fix; warn that a blind npm install may create a PATH-shadowing copy and tell the user to update with the manager they installed with |
+
+The `yarn-global` row must include `/.config/yarn/global/`: that (not
+`/.yarn/global/`) is Yarn Classic's *default* global directory, and missing it
+misclassifies a normal yarn install as `unknown` — which historically led to
+recommending npm and creating the very shadow copy the cascade exists to avoid.
 
 Cheap synchronous path checks first; the only subprocess (`npm root -g`) is the
 last probe. The result is a plain data object:
@@ -109,10 +114,12 @@ type InstallSource =
 
 ### Step 2 — resolve before install (anti-TOCTOU)
 
-Spawn `npm view @motrix/cli@<target> version --json` with `cwd = os.tmpdir()`
-(a global operation must not be captured by the surrounding project's `.npmrc`
-/ lockfile — Vercel's lesson). If npm is absent (spawn `ENOENT`) and the
-detected source is pnpm, fall back to `pnpm view`. Parsing:
+Spawn `npm view @motrix/cli@<target> version --json` from a **user-owned
+neutral directory** (`os.homedir()` — see the box below). A global operation
+must not be captured by the surrounding project's `.npmrc`/lockfile (Vercel's
+lesson), and the neutral dir must not be a shared temp dir either. If npm is
+absent (spawn `ENOENT`) and the detected source is pnpm, fall back to
+`pnpm view`. Parsing:
 
 - single version → string; range match → array, pick highest via an in-house
   ~15-line `compareSemver` (numeric x.y.z + simplified prerelease precedence;
@@ -136,13 +143,25 @@ Reports `{ from, to, method, command }`, exit `0`.
 
 ### Step 5 — delegate the install
 
-Spawn `installArgs` with `shell: false`, `cwd = os.tmpdir()`, all output
-buffered (npm can prompt mid-install; piped-but-shown output looks like a
-hang). On non-zero exit: print the buffered output, the manual command, and
+Spawn `installArgs` from the **neutral directory** (see the box below), all
+output buffered (npm can prompt mid-install; piped-but-shown output looks like
+a hang). On non-zero exit: print the buffered output, the manual command, and
 fail with `EXIT.SELF_UPDATE_FAILED (7)`. If stderr contains `EACCES` /
 `EPERM`, append npm's official prefix-relocation guidance
 (docs.npmjs.com → "Resolving EACCES permissions errors") — **never suggest
 sudo**.
+
+> **Neutral working directory (security).** Every package-manager subprocess
+> — `npm root -g` (detection), `npm/pnpm view` (resolve), the installer, and
+> the verify run — uses `cwd = os.homedir()`, not `os.tmpdir()`. On Linux
+> `os.tmpdir()` is `/tmp`, which is world-writable; package managers read
+> config from cwd **and its ancestors** (Yarn Classic merges ancestor
+> `.yarnrc` and honors `yarn-path`), so another local user could pre-plant
+> `/tmp/.yarnrc` and have a recognized self-update execute their code as the
+> victim. Home is user-owned, outside `/tmp`, and its ancestors are
+> root-owned — no injection surface — while the user's own `~/.npmrc`
+> (registry/auth) is honored regardless of cwd, so the "ignore the project's
+> config" property is preserved.
 
 ### Step 6 — verify
 
@@ -177,8 +196,20 @@ Adds **one** code to the contract (`0/2/3/4/5/6`):
 | npx / dlx / bunx one-off run | `7` | `unsupported-ephemeral` |
 | Running from a checkout | `7` | `unsupported-checkout` |
 | Unknown install source | `7` | `unknown-install` |
-| Installer exited non-zero | `7` | `install-failed` |
-| Post-install verification mismatch (npm/pnpm) | `7` | `verify-failed` |
+| Installer exited non-zero (tree unchanged) | `7` | `install-failed` (`changed: false`) |
+| Post-install verification mismatch (npm/pnpm) | `7` | `verify-failed` (`changed: true`) |
+
+**`verify-failed` is a partially-mutated state, not a no-op.** The installer
+already exited `0`, so the global tree *was* mutated — the result reports
+`changed: true` even though `ok: false`, and `manualCommand` is the
+**rollback to `from`** via the detected manager (e.g. `npm i -g @motrix/cli@0.2.1`),
+not a re-run of the forward install. We deliberately do **not** auto-rollback:
+verification can fail on a perfectly good install (e.g. a stale entry-path
+assumption), so silently reinstalling `from` could downgrade a healthy CLI and
+adds a second fallible mutation. Instead we surface the honest state plus the
+exact recovery command and let the operator decide. `install-failed`, by
+contrast, means the installer itself exited non-zero, so the tree is untouched
+(`changed: false`) and the old version still works.
 
 Every `7` payload carries `manualCommand`, and its human message ends with
 "You can run it manually: `<cmd>`".

@@ -8,9 +8,10 @@ export type ResolveOutcome =
 
 export interface ResolveCtx {
   runCommand: RunCommand
-  /** cwd for the view subprocess — a neutral dir, so the surrounding
-   *  project's .npmrc / lockfile can't capture a global operation. */
-  tmpdir: string
+  /** cwd for the view subprocess — a user-owned neutral dir, so neither the
+   *  surrounding project's nor a hostile shared-temp `.npmrc`/lockfile can
+   *  capture a global operation. */
+  neutralDir: string
   /** Try `pnpm view` when npm itself is missing (pnpm-only machines). */
   allowPnpmFallback: boolean
 }
@@ -28,9 +29,9 @@ export async function resolveTargetVersion(
   ctx: ResolveCtx
 ): Promise<ResolveOutcome> {
   const args = ['view', `${OWN_PACKAGE}@${spec}`, 'version', '--json']
-  let res = await ctx.runCommand('npm', args, { cwd: ctx.tmpdir })
+  let res = await ctx.runCommand('npm', args, { cwd: ctx.neutralDir })
   if (res.code === null && ctx.allowPnpmFallback) {
-    res = await ctx.runCommand('pnpm', args, { cwd: ctx.tmpdir })
+    res = await ctx.runCommand('pnpm', args, { cwd: ctx.neutralDir })
   }
   if (res.code === null) {
     return {

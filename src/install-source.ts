@@ -28,8 +28,9 @@ export interface DetectCtx {
   env: NodeJS.ProcessEnv
   /** Used only by the final `npm root -g` probe. */
   runCommand: RunCommand
-  /** cwd for the `npm root -g` probe, so a project-local .npmrc can't skew it. */
-  tmpdir: string
+  /** cwd for the `npm root -g` probe — a user-owned neutral dir, so neither a
+   *  project-local nor a hostile shared-temp `.npmrc` can skew it. */
+  neutralDir: string
 }
 
 /** The exact installer invocation, e.g. `['pnpm','add','-g','@motrix/cli@1.2.3']`. */
@@ -110,7 +111,14 @@ export async function detectInstallSource(
   ) {
     return { executable: true, kind: 'pnpm-global' }
   }
-  if (p.includes('/.yarn/global/')) {
+  // Yarn Classic's default global dir is `~/.config/yarn/global`, NOT
+  // `~/.yarn/global` — miss it and a normal yarn install falls through to
+  // `unknown`. `%LOCALAPPDATA%/Yarn/Data/global` is the Windows default.
+  if (
+    p.includes('/.config/yarn/global/') ||
+    p.includes('/.yarn/global/') ||
+    p.includes('/Yarn/Data/global/')
+  ) {
     return { executable: true, kind: 'yarn-global' }
   }
   if (p.includes('/.bun/install/global/')) {
@@ -133,7 +141,9 @@ function withSlash(dir: string): string {
 
 /** `npm root -g`, realpath'd; null when npm is unusable or silent. */
 async function npmGlobalRoot(ctx: DetectCtx): Promise<string | null> {
-  const res = await ctx.runCommand('npm', ['root', '-g'], { cwd: ctx.tmpdir })
+  const res = await ctx.runCommand('npm', ['root', '-g'], {
+    cwd: ctx.neutralDir,
+  })
   if (res.code !== 0) return null
   const raw = res.stdout.trim()
   if (!raw) return null

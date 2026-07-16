@@ -37,7 +37,7 @@ function ctx(over: Partial<SelfUpdateCtx> = {}): SelfUpdateCtx {
     execPath: 'node',
     realpath: async (p) => p,
     runCommand: scriptedRun({}),
-    tmpdir: '/tmp',
+    neutralDir: '/tmp',
     whichBin: async () => null,
     ...over,
   }
@@ -75,7 +75,10 @@ describe('runSelfUpdate — guards and refusals', () => {
       reason: 'unknown-install',
       exitCode: EXIT.SELF_UPDATE_FAILED,
     })
-    expect(r.manualCommand).toContain('npm install -g @motrix/cli')
+    // Must NOT present npm as THE fix — that creates a shadowing copy when the
+    // real installer was another manager. The message warns and lists options.
+    expect(r.message).toMatch(/shadow/i)
+    expect(r.message).toContain('pnpm, yarn, bun')
   })
 
   it('refuses npx runs with exit 7 and a manual command, without installing', async () => {
@@ -280,7 +283,14 @@ describe('runSelfUpdate — install and verify', () => {
       ok: false,
       reason: 'verify-failed',
       exitCode: EXIT.SELF_UPDATE_FAILED,
+      // Installer exited 0 → the tree WAS mutated; report it honestly.
+      changed: true,
     })
+    // Recovery is a rollback to the previous version via the same manager,
+    // not a re-run of the forward install.
+    expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.2.1')
+    expect(r.message).toContain('motrix --version')
+    expect(r.message).toContain('restore 0.2.1')
   })
 
   it('only warns (never fails) on the PATH check for yarn installs', async () => {
@@ -349,8 +359,10 @@ describe('runSelfUpdate — install and verify', () => {
       ok: false,
       reason: 'verify-failed',
       exitCode: EXIT.SELF_UPDATE_FAILED,
+      changed: true,
     })
-    expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.3.0')
+    // Recovery command rolls back to `from` (0.2.1), not the forward install.
+    expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.2.1')
   })
 
   it('reports an installer spawn failure (e.g. ENOENT) as install-failed', async () => {

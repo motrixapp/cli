@@ -10,7 +10,7 @@ function ctx(
     runCommand: vi
       .fn()
       .mockResolvedValue({ code: 0, stdout: '', stderr: '', ...result }),
-    tmpdir: '/tmp',
+    neutralDir: '/tmp',
     allowPnpmFallback: false,
     ...over,
   }
@@ -68,7 +68,7 @@ describe('resolveTargetVersion', () => {
       .mockResolvedValueOnce({ code: 0, stdout: '"0.3.0"\n', stderr: '' })
     const r = await resolveTargetVersion('latest', {
       runCommand: run,
-      tmpdir: '/tmp',
+      neutralDir: '/tmp',
       allowPnpmFallback: true,
     })
     expect(r).toEqual({ ok: true, version: '0.3.0' })
