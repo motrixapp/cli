@@ -183,6 +183,10 @@ Adds **one** code to the contract (`0/2/3/4/5/6`):
 Every `7` payload carries `manualCommand`, and its human message ends with
 "You can run it manually: `<cmd>`".
 
+One nuance inside `3`: "npm itself is not installed" also resolves to `3`
+(`resolve-failed`), but unlike a transient network error it will not heal on
+retry — the message says so ("install npm or update manually").
+
 ## Output
 
 - **TTY** — one line: `Updated @motrix/cli 0.2.1 → 0.3.0 (pnpm)` /
@@ -191,14 +195,15 @@ Every `7` payload carries `manualCommand`, and its human message ends with
 
   ```json
   { "ok": true, "changed": true, "from": "0.2.1", "to": "0.3.0",
-    "method": "pnpm-global", "command": "pnpm add -g @motrix/cli@0.3.0",
-    "warning": null }
+    "method": "pnpm-global", "command": "pnpm add -g @motrix/cli@0.3.0" }
   ```
 
   No-op: `{ "ok": true, "changed": false, "reason": "already-up-to-date",
-  "from": "0.2.1", "to": "0.2.1" }` — one uniform shape, `from`/`to` on every
-  outcome. Dry run adds `"dryRun": true` (the installer command rides the
-  same `command` field). Failures carry `reason` + `manualCommand`.
+  "from": "0.2.1", "to": "0.2.1" }` — one shape; fields that don't apply
+  (`warning`, `method`, …) are omitted, never `null`, and `from`/`to` appear
+  whenever both versions are known (refusals that fire before resolution
+  carry neither). Dry run adds `"dryRun": true` (the installer command rides
+  the same `command` field). Failures carry `reason` + `manualCommand`.
 
 ## Caveats
 
