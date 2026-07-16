@@ -120,7 +120,7 @@ npm 不存在(spawn `ENOENT`)且检测源为 pnpm,退回 `pnpm view`。解析:
 
 ### 第 4 步 — `--dry-run` 到此为止
 
-报告 `{ from, to, method, wouldRun }`,退出 `0`。
+报告 `{ from, to, method, command }`,退出 `0`。
 
 ### 第 5 步 — 委托安装
 
@@ -180,9 +180,9 @@ sudo**。
   ```
 
   无操作:`{ "ok": true, "changed": false, "reason": "already-up-to-date",
-  "current": "0.2.1", "resolved": "0.2.1" }`。dry run 追加
-  `"dryRun": true, "wouldRun": "..."`。失败用标准 CLI 错误 JSON,带
-  `reason` + `manualCommand`。
+  "from": "0.2.1", "to": "0.2.1" }`——统一形状,每种结果都带 `from`/`to`。
+  dry run 追加 `"dryRun": true`(安装命令仍走同一个 `command` 字段)。
+  失败结果带 `reason` + `manualCommand`。
 
 ## 注意事项
 
