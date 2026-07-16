@@ -1,0 +1,62 @@
+{
+  "name": "@motrix/cli",
+  "version": "0.1.0",
+  "description": "Command-line client for the Motrix download manager — speaks MDXP (JSON-RPC 2.0) to a running Motrix, for humans and AI agents.",
+  "license": "MIT",
+  "author": "Motrix",
+  "homepage": "https://github.com/motrixapp/cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/motrixapp/cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/motrixapp/cli/issues"
+  },
+  "keywords": [
+    "motrix",
+    "cli",
+    "download",
+    "download-manager",
+    "mdxp",
+    "aria2",
+    "json-rpc",
+    "agent"
+  ],
+  "type": "module",
+  "main": "dist/bin/motrix.js",
+  "bin": {
+    "motrix": "dist/bin/motrix.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md"
+  ],
+  "packageManager": "pnpm@11.13.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "prepublishOnly": "pnpm run build"
+  },
+  "dependencies": {
+    "commander": "^12"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.1",
+    "@motrix/mdxp": "^0.3.0",
+    "@types/node": "^24",
+    "tsup": "^8",
+    "typescript": "^5.6",
+    "vitest": "^3"
+  }
+}

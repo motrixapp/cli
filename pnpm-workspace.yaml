@@ -1,0 +1,13 @@
+# Single-package repo. pnpm 11 requires an explicit build-script decision for
+# any dependency that ships an install script. esbuild is pulled in transitively
+# by tsup (build-time only — it is never in the published tarball, which ships
+# just dist/ + SKILL.md + README). Allowing its install script mirrors the
+# Motrix app workspace and matches how npm installs it for end users anyway.
+allowBuilds:
+  esbuild: true
+
+# Trust our own @motrix/* protocol lib even when freshly published — exempt it
+# from any local minimumReleaseAge supply-chain gate. Same stance as the Motrix
+# app workspace. No-op on machines/CI without such a policy.
+minimumReleaseAgeExclude:
+  - '@motrix/mdxp@0.3.0'
