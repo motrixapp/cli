@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EXIT } from '../errors'
-import { type OpenDeps, runOpen } from './open'
+import { isValidPort, type OpenDeps, runOpen } from './open'
 
 const READY = 'http://127.0.0.1:16800'
 
@@ -118,5 +118,39 @@ describe('runOpen', () => {
       exitCode: EXIT.NETWORK,
       waitedMs: 1000,
     })
+  })
+})
+
+describe('isValidPort', () => {
+  it('accepts a real port', () => {
+    expect(isValidPort(16800)).toBe(true)
+  })
+
+  it('rejects 0', () => {
+    expect(isValidPort(0)).toBe(false)
+  })
+
+  it('rejects a negative port', () => {
+    expect(isValidPort(-1)).toBe(false)
+  })
+
+  it('rejects a port above 65535', () => {
+    expect(isValidPort(70000)).toBe(false)
+  })
+
+  it('rejects a non-integer port', () => {
+    expect(isValidPort(8080.5)).toBe(false)
+  })
+
+  it('rejects NaN', () => {
+    expect(isValidPort(Number.NaN)).toBe(false)
+  })
+
+  it('rejects undefined', () => {
+    expect(isValidPort(undefined)).toBe(false)
+  })
+
+  it('rejects a stringified port', () => {
+    expect(isValidPort('16800')).toBe(false)
   })
 })

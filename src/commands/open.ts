@@ -150,6 +150,17 @@ function tcpConnectable(
   })
 }
 
+/** A usable TCP port from endpoint.json — guards net.connect, which throws
+ *  synchronously on a port outside 1..65535 (a corrupt/partial file). */
+export function isValidPort(port: unknown): port is number {
+  return (
+    typeof port === 'number' &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port <= 65535
+  )
+}
+
 /** Default probe: endpoint.json present + pid alive + port accepting TCP. */
 export async function defaultProbeBridge(): Promise<string | null> {
   let file: EndpointFile
@@ -162,7 +173,7 @@ export async function defaultProbeBridge(): Promise<string | null> {
   } catch {
     return null
   }
-  if (!file.port || !file.pid || !isPidAlive(file.pid)) return null
+  if (!isValidPort(file.port) || !file.pid || !isPidAlive(file.pid)) return null
   const up = await tcpConnectable('127.0.0.1', file.port)
   return up ? `http://127.0.0.1:${file.port}` : null
 }
