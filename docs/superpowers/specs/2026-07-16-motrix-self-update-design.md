@@ -145,11 +145,22 @@ Reports `{ from, to, method, command }`, exit `0`.
 
 Spawn `installArgs` from the **neutral directory** (see the box below), all
 output buffered (npm can prompt mid-install; piped-but-shown output looks like
-a hang). On non-zero exit: print the buffered output, the manual command, and
-fail with `EXIT.SELF_UPDATE_FAILED (7)`. If stderr contains `EACCES` /
-`EPERM`, append npm's official prefix-relocation guidance
-(docs.npmjs.com → "Resolving EACCES permissions errors") — **never suggest
-sudo**.
+a hang). If stderr contains `EACCES` / `EPERM`, append npm's official
+prefix-relocation guidance (docs.npmjs.com → "Resolving EACCES permissions
+errors") — **never suggest sudo**.
+
+A non-zero exit does **not** prove the tree is untouched — a package manager
+can replace files and *then* fail (lifecycle script, disk, dependency
+resolution). So after any non-zero exit, **observe the actually-installed
+version** (Step 6's observation, against the bound root for npm else PATH) and
+branch:
+
+- observed == `from` → old version intact → `install-failed`, `changed: false`,
+  `manualCommand` = the forward install (safe to retry).
+- observed == `to` → the target is live despite the error → **success**, with
+  the installer output surfaced as a warning.
+- observed is anything else / unrunnable → indeterminate, possibly partial →
+  `install-failed`, `changed: true`, `manualCommand` = **rollback to `from`**.
 
 > **Neutral working directory (security).** Every package-manager subprocess
 > — `npm root -g` (detection), `npm/pnpm view` (resolve), the installer, and
@@ -165,20 +176,39 @@ sudo**.
 
 ### Step 6 — verify
 
-- **npm / pnpm** (global root obtainable via `npm root -g` / `pnpm root -g`):
-  spawn `node <root>/@motrix/cli/dist/bin/motrix.js --version` — bypasses
-  PATH, cross-platform. Output ≠ resolved target → `SELF_UPDATE_FAILED (7)`.
-  If the root query itself fails (`pnpm root -g` has broken across pnpm's
-  global-layout changes, pnpm/pnpm#11528), degrade to the PATH-based
-  warning-only check below instead of hard-failing.
-- **yarn / bun / volta**: PATH-based check only — resolve `motrix` via an
-  injectable PATH lookup and run `--version`. Mismatch → **success with a
-  shadowing warning** (the PM reported success; a different install earlier on
-  PATH is the likely cause), never a hard failure.
+Verification must confirm the update reached **the installation the user
+actually runs** — not merely that *some* install somewhere now has the target.
+
+- **npm** (root bound at detection): only npm captures `globalRoot` — detection
+  proved via realpath-containment that the running entry lives inside
+  `npm root -g`. So spawn `node <globalRoot>/@motrix/cli/dist/bin/motrix.js
+  --version` (PATH-independent, cross-platform). Mismatch/unrunnable →
+  `SELF_UPDATE_FAILED (7)`. If it matches, additionally check `motrix` on PATH;
+  a PATH disagreement here is a **shadow, not a failure** → success with a
+  warning (we *proved* the bound tree is at the target).
+- **pnpm / yarn / bun / volta** (root NOT bound): we cannot prove which tree the
+  PATH package manager wrote to — a second pnpm with a different global root
+  would pass a fresh `pnpm root -g` check while leaving the running install
+  untouched. So verify the **outcome the user gets**: what `motrix` on PATH
+  reports now. Match → success. Mismatch or unrunnable → `SELF_UPDATE_FAILED
+  (7)` (**not** a warning — a caller must not read exit 0 when its `motrix`
+  still runs the old version). The *only* warning-only case is "nothing named
+  `motrix` is on PATH yet" (e.g. a freshly-created PNPM_HOME/volta bin dir not
+  in this shell): installed, but unconfirmable from here.
+  - We deliberately no longer call `pnpm root -g` at verify time (it can point
+    at a different pnpm — the source of the wrong-tree false success).
 - Windows note: the installer rewrites the running command's `.cmd`/`.ps1`
   shims mid-flight. Safe — node already holds the JS in memory — but the
   command prints its result and exits promptly after verification; nothing
   else runs post-install.
+
+> **Residual limit.** In the pathological case of two same-named managers with
+> different global roots where the *wrong* one lands earlier on PATH after the
+> update, the PATH check could still read the target and report success. Fully
+> closing that needs per-manager root/prefix binding for every manager (and
+> `pnpm root -g` is itself unreliable); given npm-global is the dominant real
+> install and it *is* bound, we accept this and document it rather than build
+> fragile per-PM probes.
 
 ## Exit codes and error taxonomy
 
@@ -195,9 +225,16 @@ Adds **one** code to the contract (`0/2/3/4/5/6`):
 | Registry resolve failed / network | `3` NETWORK | `resolve-failed` |
 | npx / dlx / bunx one-off run | `7` | `unsupported-ephemeral` |
 | Running from a checkout | `7` | `unsupported-checkout` |
-| Unknown install source | `7` | `unknown-install` |
-| Installer exited non-zero (tree unchanged) | `7` | `install-failed` (`changed: false`) |
-| Post-install verification mismatch (npm/pnpm) | `7` | `verify-failed` (`changed: true`) |
+| Unknown install source | `7` | `unknown-install` (no `manualCommand`) |
+| Installer failed, old version intact | `7` | `install-failed` (`changed: false`, `manualCommand` = retry) |
+| Installer failed, state unconfirmable | `7` | `install-failed` (`changed: true`, `manualCommand` = rollback) |
+| Post-install verification mismatch | `7` | `verify-failed` (`changed: true`, `manualCommand` = rollback) |
+
+**`unknown-install` carries no `manualCommand`.** An agent treats that field as
+a command to run; a blind `npm i -g` for a pnpm/yarn/bun install would create
+the PATH-shadowing copy this command exists to prevent. Both unknown paths
+(source not classifiable; own version unreadable) return advisory prose only —
+"reinstall with the manager you originally used" — and no runnable command.
 
 **`verify-failed` is a partially-mutated state, not a no-op.** The installer
 already exited `0`, so the global tree *was* mutated — the result reports

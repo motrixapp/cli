@@ -62,7 +62,10 @@ describe('runSelfUpdate — guards and refusals', () => {
       reason: 'unknown-install',
       exitCode: EXIT.SELF_UPDATE_FAILED,
     })
-    expect(r.manualCommand).toContain('npm install -g @motrix/cli')
+    // No runnable command: an agent would execute manualCommand, and a blind
+    // `npm i -g` for a non-npm install creates a shadowing copy.
+    expect(r.manualCommand).toBeUndefined()
+    expect(r.message).toContain('pnpm, yarn, bun')
   })
 
   it('fails with unknown-install when the install path matches no known cascade fragment', async () => {
@@ -76,9 +79,11 @@ describe('runSelfUpdate — guards and refusals', () => {
       exitCode: EXIT.SELF_UPDATE_FAILED,
     })
     // Must NOT present npm as THE fix — that creates a shadowing copy when the
-    // real installer was another manager. The message warns and lists options.
+    // real installer was another manager. Warn, list options, and carry no
+    // runnable command.
     expect(r.message).toMatch(/shadow/i)
     expect(r.message).toContain('pnpm, yarn, bun')
+    expect(r.manualCommand).toBeUndefined()
   })
 
   it('refuses npx runs with exit 7 and a manual command, without installing', async () => {
@@ -256,6 +261,8 @@ describe('runSelfUpdate — install and verify', () => {
             stdout: '',
             stderr: 'npm error EACCES: permission denied /usr/local/lib\n',
           },
+          // EACCES fails before writing, so the existing 0.2.1 is intact.
+          nodeVersion: { code: 0, stdout: '0.2.1\n', stderr: '' },
         }),
       })
     )
@@ -263,11 +270,55 @@ describe('runSelfUpdate — install and verify', () => {
       ok: false,
       reason: 'install-failed',
       exitCode: EXIT.SELF_UPDATE_FAILED,
+      // Old version still runs → not a mutated state.
+      changed: false,
     })
     expect(r.message).toContain('EACCES')
     expect(r.message).toContain('resolving-eacces-permissions-errors')
     expect(r.message).toContain('Do NOT use sudo')
+    // Old install intact → retry the forward install, not a rollback.
     expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.3.0')
+  })
+
+  it('reports changed:true + a rollback when an install failure leaves state unconfirmable', async () => {
+    const r = await runSelfUpdate(
+      {},
+      ctx({
+        runCommand: scriptedRun({
+          install: { code: 1, stdout: '', stderr: 'wrote files, then died\n' },
+          // Post-failure the entry can't run → state indeterminate/broken.
+          nodeVersion: { code: 1, stdout: '', stderr: 'corrupt' },
+        }),
+      })
+    )
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'install-failed',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+      changed: true,
+    })
+    expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.2.1')
+    expect(r.message).toContain('partially updated')
+  })
+
+  it('treats an install that errors but leaves the target active as success', async () => {
+    const r = await runSelfUpdate(
+      {},
+      ctx({
+        runCommand: scriptedRun({
+          install: { code: 1, stdout: '', stderr: 'noisy postinstall\n' },
+          // Target is actually live despite the non-zero exit.
+          nodeVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+        }),
+      })
+    )
+    expect(r).toMatchObject({
+      ok: true,
+      changed: true,
+      to: '0.3.0',
+      exitCode: EXIT.OK,
+    })
+    expect(r.warning).toContain('now active')
   })
 
   it('fails verify when the npm-installed entry reports the wrong version', async () => {
@@ -293,18 +344,55 @@ describe('runSelfUpdate — install and verify', () => {
     expect(r.message).toContain('restore 0.2.1')
   })
 
-  it('only warns (never fails) on the PATH check for yarn installs', async () => {
+  it('fails verify when a yarn install`s motrix on PATH reports the wrong version', async () => {
+    // Unbound manager: we can`t prove the tree, so a PATH mismatch means the
+    // update did not reach the installation the user runs — a failure, not a
+    // warning (the caller must not read exit 0 here).
     const c = ctx({
       argv1:
-        '/Users/x/.yarn/global/node_modules/@motrix/cli/dist/bin/motrix.js',
+        '/Users/x/.config/yarn/global/node_modules/@motrix/cli/dist/bin/motrix.js',
       whichBin: async () => '/other/bin/motrix',
       runCommand: scriptedRun({
         binVersion: { code: 0, stdout: '0.1.0\n', stderr: '' },
       }),
     })
     const r = await runSelfUpdate({}, c)
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'verify-failed',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+      method: 'yarn-global',
+    })
+    expect(r.manualCommand).toBe('yarn global add @motrix/cli@0.2.1')
+  })
+
+  it('succeeds (no warning) when a yarn install`s motrix on PATH reports the target', async () => {
+    const c = ctx({
+      argv1:
+        '/Users/x/.config/yarn/global/node_modules/@motrix/cli/dist/bin/motrix.js',
+      whichBin: async () => '/home/x/.yarn/bin/motrix',
+      runCommand: scriptedRun({
+        binVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+      }),
+    })
+    const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'yarn-global' })
-    expect(r.warning).toContain('shadow')
+    expect(r.warning).toBeUndefined()
+  })
+
+  it('warns (but succeeds) when npm updated the bound root yet PATH is shadowed', async () => {
+    const c = ctx({
+      whichBin: async () => '/other/bin/motrix',
+      runCommand: scriptedRun({
+        // Bound npm entry reports the target…
+        nodeVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+        // …but `motrix` first on PATH is a different, older install.
+        binVersion: { code: 0, stdout: '0.1.0\n', stderr: '' },
+      }),
+    })
+    const r = await runSelfUpdate({}, c)
+    expect(r).toMatchObject({ ok: true, changed: true, method: 'npm-global' })
+    expect(r.warning).toContain('shadowing')
   })
 
   it('succeeds with a warning when no motrix is found on PATH (volta)', async () => {
@@ -333,14 +421,12 @@ describe('runSelfUpdate — install and verify', () => {
     )
   })
 
-  it('degrades to a warning-only PATH check when `pnpm root -g` itself breaks (pnpm/pnpm#11528)', async () => {
-    const c = ctx({
-      argv1: PNPM_BIN,
-      runCommand: scriptedRun({
-        root: { code: 1, stdout: '', stderr: 'broken' },
-      }),
-      whichBin: async () => null,
-    })
+  it('verifies pnpm via PATH and warns (succeeds) when motrix is not on PATH yet', async () => {
+    // pnpm is not root-bound, so verify never queries `pnpm root -g` (which can
+    // point at a different pnpm); it checks what `motrix` on PATH reports. When
+    // nothing is on PATH yet (fresh PNPM_HOME not in this shell) that is a
+    // warning-only success, not a failure.
+    const c = ctx({ argv1: PNPM_BIN, whichBin: async () => null })
     const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'pnpm-global' })
     expect(r.warning).toBeDefined()
@@ -378,6 +464,8 @@ describe('runSelfUpdate — install and verify', () => {
               code: 'ENOENT',
             }),
           },
+          // The manager binary never ran, so the existing 0.2.1 is untouched.
+          nodeVersion: { code: 0, stdout: '0.2.1\n', stderr: '' },
         }),
       })
     )
@@ -385,6 +473,7 @@ describe('runSelfUpdate — install and verify', () => {
       ok: false,
       reason: 'install-failed',
       exitCode: EXIT.SELF_UPDATE_FAILED,
+      changed: false,
     })
     expect(r.message).toContain('spawn error')
   })
