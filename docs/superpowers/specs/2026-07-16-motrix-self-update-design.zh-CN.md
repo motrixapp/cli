@@ -80,10 +80,14 @@ motrix self-update [target] [--dry-run]
 | 4 | 不在任何 `node_modules/` 之下 | `checkout` | 拒绝——"running from a checkout; use git pull + pnpm build" |
 | 5 | `/.volta/` 或 `/Volta/` | `volta` | 执行 `volta install @motrix/cli@<v>` |
 | 6 | 在 `$PNPM_HOME` 之下,或 pnpm global 路径片段(`/.local/share/pnpm/`、`/Library/pnpm/`、`/AppData/Local/pnpm/`、`/.pnpm/global/`) | `pnpm-global` | 执行 `pnpm add -g @motrix/cli@<v>` |
-| 7 | `/.yarn/global/` | `yarn-global` | 执行 `yarn global add @motrix/cli@<v>` |
+| 7 | `/.config/yarn/global/`(Yarn Classic 默认)、`/.yarn/global/` 或 `/Yarn/Data/global/`(Windows) | `yarn-global` | 执行 `yarn global add @motrix/cli@<v>` |
 | 8 | `/.bun/install/global/` | `bun-global` | 执行 `bun add -g @motrix/cli@<v>` |
 | 9 | realpath 位于 `npm root -g` 之内(spawn 后做 realpath 包含比较) | `npm-global` | 执行 `npm i -g @motrix/cli@<v>` |
-| 10 | 全部未命中 | `unknown` | 拒绝 + 打印 `npm i -g` 手动命令 |
+| 10 | 全部未命中 | `unknown` | 拒绝——**不**把 `npm i -g` 当作解法;警告盲跑 npm 可能造成 PATH 影子副本,并让用户用当初安装的包管理器更新 |
+
+`yarn-global` 行必须包含 `/.config/yarn/global/`:那(而非 `/.yarn/global/`)
+才是 Yarn Classic 的*默认*全局目录,漏掉它会把正常 yarn 安装误判为 `unknown`
+——历史上这正是"推荐 npm → 制造影子副本"的诱因,而 cascade 本就是为避免它而存在。
 
 廉价的同步路径检查在前;唯一的子进程(`npm root -g`)是最后一个探测。
 结果是纯数据对象:
@@ -100,8 +104,9 @@ type InstallSource =
 
 ### 第 2 步 — 先解析后安装(反 TOCTOU)
 
-以 `cwd = os.tmpdir()` spawn `npm view @motrix/cli@<target> version --json`
-(全局操作不能被所在项目的 `.npmrc` / lockfile 捕获——Vercel 的教训)。若
+从**用户自有的中立目录**(`os.homedir()`,见下方方框)spawn
+`npm view @motrix/cli@<target> version --json`。全局操作既不能被所在项目的
+`.npmrc` / lockfile 捕获(Vercel 的教训),中立目录也不能是共享临时目录。若
 npm 不存在(spawn `ENOENT`)且检测源为 pnpm,退回 `pnpm view`。解析:
 
 - 单一版本 → 字符串;range 命中多个 → 数组,用自研 ~15 行 `compareSemver`
@@ -124,12 +129,21 @@ npm 不存在(spawn `ENOENT`)且检测源为 pnpm,退回 `pnpm view`。解析:
 
 ### 第 5 步 — 委托安装
 
-以 `shell: false`、`cwd = os.tmpdir()` spawn `installArgs`,输出全部 buffer
+从**中立目录**(见下方方框)spawn `installArgs`,输出全部 buffer
 (npm 可能在安装中途弹交互提示;半显示的管道输出看起来像卡死)。非零退出:
 打印 buffer 的输出和手动命令,以 `EXIT.SELF_UPDATE_FAILED (7)` 失败。若
 stderr 含 `EACCES` / `EPERM`,附上 npm 官方的 prefix 迁移指引
 (docs.npmjs.com → "Resolving EACCES permissions errors")——**绝不建议
 sudo**。
+
+> **中立工作目录(安全)。** 所有包管理器子进程——`npm root -g`(检测)、
+> `npm/pnpm view`(解析)、安装器、验证运行——都用 `cwd = os.homedir()`,
+> 而非 `os.tmpdir()`。Linux 上 `os.tmpdir()` 即 `/tmp`(全局可写);包管理器
+> 会从 cwd **及其祖先目录**读配置(Yarn Classic 合并祖先 `.yarnrc` 并遵从
+> `yarn-path`),因此另一个本地用户可以预置 `/tmp/.yarnrc`,让一次被识别的
+> self-update 以受害者身份执行其代码。home 归用户所有、在 `/tmp` 之外、其祖先
+> 由 root 拥有——无注入面——同时 `~/.npmrc`(registry/auth)无论 cwd 都被读到,
+> 于是"忽略当前项目配置"的性质得以保留。
 
 ### 第 6 步 — 验证
 
@@ -161,8 +175,17 @@ sudo**。
 | npx / dlx / bunx 一次性运行 | `7` | `unsupported-ephemeral` |
 | 从 checkout 运行 | `7` | `unsupported-checkout` |
 | 未知安装源 | `7` | `unknown-install` |
-| 安装器非零退出 | `7` | `install-failed` |
-| 安装后验证不匹配(npm/pnpm) | `7` | `verify-failed` |
+| 安装器非零退出(树未改动) | `7` | `install-failed`(`changed: false`) |
+| 安装后验证不匹配(npm/pnpm) | `7` | `verify-failed`(`changed: true`) |
+
+**`verify-failed` 是"已部分改动"的状态,而非 no-op。** 安装器已 exit `0`,
+全局树*已*被改动——结果报 `changed: true`(尽管 `ok: false`),`manualCommand`
+是经检测到的包管理器**回滚到 `from`**(如 `npm i -g @motrix/cli@0.2.1`),而非
+重跑正向安装。我们刻意**不**自动回滚:验证可能在一个完好的安装上失败(如
+entry 路径假设过时),静默重装 `from` 反而会把健康的 CLI 降级,并多出一次
+可能失败的变更。我们如实呈现状态加上精确的恢复命令,交由操作者决定。相比之下
+`install-failed` 指安装器本身非零退出,树未被触碰(`changed: false`),旧版本
+仍可用。
 
 每个 `7` 的 payload 都带 `manualCommand`;人类可读消息以
 "You can run it manually: `<cmd>`" 结尾。

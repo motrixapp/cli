@@ -15,7 +15,7 @@ function ctx(over: Partial<DetectCtx> = {}): DetectCtx {
     runCommand: vi
       .fn()
       .mockResolvedValue({ code: 0, stdout: `${NPM_ROOT}\n`, stderr: '' }),
-    tmpdir: '/tmp',
+    neutralDir: '/tmp',
     ...over,
   }
 }
@@ -138,6 +138,23 @@ describe('detectInstallSource — executable sources', () => {
       })
     )
     expect(r).toMatchObject({ executable: true, kind: 'yarn-global' })
+  })
+
+  it('detects yarn-global at Yarn Classic default (~/.config/yarn/global)', async () => {
+    // Yarn Classic's DEFAULT global dir — not `~/.yarn/global`. Missing this
+    // fragment misclassifies a normal yarn install as unknown, which then
+    // wrongly recommends `npm i -g` and creates a shadowing copy.
+    const run = vi.fn()
+    const r = await detectInstallSource(
+      ctx({
+        argv1:
+          '/Users/x/.config/yarn/global/node_modules/@motrix/cli/dist/bin/motrix.js',
+        runCommand: run,
+      })
+    )
+    expect(r).toMatchObject({ executable: true, kind: 'yarn-global' })
+    // Matched by fragment before the npm probe — no subprocess spawned.
+    expect(run).not.toHaveBeenCalled()
   })
 
   it('detects bun-global (install/global, not install/cache)', async () => {
