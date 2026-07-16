@@ -54,6 +54,7 @@ export interface SelfUpdateCtx {
   currentVersion: string | null
   argv1: string
   env: NodeJS.ProcessEnv
+  execPath: string
   realpath: (p: string) => Promise<string>
   runCommand: RunCommand
   tmpdir: string
@@ -108,6 +109,7 @@ export async function runSelfUpdate(
     realpath: ctx.realpath,
     env: ctx.env,
     runCommand: ctx.runCommand,
+    tmpdir: ctx.tmpdir,
   })
   if (!source.executable) {
     const reason: SelfUpdateReason =
@@ -270,7 +272,7 @@ async function verifyInstall(
     }
     if (root) {
       const entry = join(root, '@motrix', 'cli', 'dist', 'bin', 'motrix.js')
-      const res = await ctx.runCommand('node', [entry, '--version'], {
+      const res = await ctx.runCommand(ctx.execPath, [entry, '--version'], {
         cwd: ctx.tmpdir,
       })
       if (res.code === 0) {
@@ -330,6 +332,7 @@ export function defaultSelfUpdateCtx(): SelfUpdateCtx {
     currentVersion: readOwnVersion(),
     argv1: process.argv[1] ?? '',
     env: process.env,
+    execPath: process.execPath,
     realpath: (p) => realpath(p),
     runCommand,
     tmpdir: tmpdir(),

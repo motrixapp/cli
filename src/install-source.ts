@@ -28,6 +28,8 @@ export interface DetectCtx {
   env: NodeJS.ProcessEnv
   /** Used only by the final `npm root -g` probe. */
   runCommand: RunCommand
+  /** cwd for the `npm root -g` probe, so a project-local .npmrc can't skew it. */
+  tmpdir: string
 }
 
 /** The exact installer invocation, e.g. `['pnpm','add','-g','@motrix/cli@1.2.3']`. */
@@ -131,7 +133,7 @@ function withSlash(dir: string): string {
 
 /** `npm root -g`, realpath'd; null when npm is unusable or silent. */
 async function npmGlobalRoot(ctx: DetectCtx): Promise<string | null> {
-  const res = await ctx.runCommand('npm', ['root', '-g'])
+  const res = await ctx.runCommand('npm', ['root', '-g'], { cwd: ctx.tmpdir })
   if (res.code !== 0) return null
   const raw = res.stdout.trim()
   if (!raw) return null
