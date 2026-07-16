@@ -33,6 +33,7 @@ describe('buildProgram', () => {
     for (const cmd of [
       'list',
       'stats',
+      'open',
       'add',
       'pause',
       'resume',
@@ -52,6 +53,13 @@ describe('buildProgram', () => {
     expect(flags).toContain('--endpoint')
     expect(flags).toContain('--token')
     expect(flags).toContain('--json')
+  })
+
+  it('registers the open command with a --timeout option', () => {
+    const program = buildProgram()
+    const open = program.commands.find((c) => c.name() === 'open')
+    expect(open).toBeDefined()
+    expect(open?.options.some((o) => o.long === '--timeout')).toBe(true)
   })
 
   it('applyExitOverride makes a subcommand usage error THROW (→ exit 2)', async () => {
