@@ -17,6 +17,7 @@ import { runWatch, type WatchOpts } from './commands/watch'
 import { discoverBaseUrl, discoverEndpoint } from './discovery'
 import { CliError, EXIT, type ExitCode } from './errors'
 import { wantsJson } from './output'
+import { readOwnVersion } from './pkg'
 
 interface GlobalOpts {
   endpoint?: string
@@ -62,6 +63,11 @@ export function buildProgram(): Command {
   program
     .name('motrix')
     .description('Drive a local or remote Motrix download manager.')
+    .version(
+      readOwnVersion() ?? 'unknown',
+      '-V, --version',
+      'print the CLI version'
+    )
     .option(
       '--endpoint <url>',
       'bridge base URL (default: auto-discovered local desktop)'
@@ -133,6 +139,7 @@ export function buildProgram(): Command {
         stdout: process.stdout,
         stderr: process.stderr,
         json: global.json,
+        clientVersion: readOwnVersion() ?? undefined,
       })
     })
 
