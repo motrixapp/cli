@@ -33,7 +33,8 @@
   "files": [
     "dist",
     "SKILL.md",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "packageManager": "pnpm@11.13.0",
   "publishConfig": {

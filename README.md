@@ -1,96 +1,142 @@
 # @motrix/cli
 
-`motrix` — a command-line client for the [Motrix](https://motrix.app) download
-manager, designed to be driven by both humans and AI agents. It speaks MDXP
-(JSON-RPC 2.0) to a running Motrix over a unary `POST /mdxp` transport, plus the
-REST `/mdxp/pair/*` device-code routes for remote pairing.
+**English** · [简体中文](./README.zh-CN.md)
 
-## Install
+`motrix` is the command-line client for the [Motrix](https://motrix.app)
+download manager, built for both humans and AI agents. It speaks **MDXP** (the
+Motrix Download eXchange Protocol — JSON-RPC 2.0) to an already-running Motrix
+over a unary `POST /mdxp` transport, and can target either a local desktop app
+(auto-discovered) or a remote / headless Motrix server (paired once).
+
+The CLI is a **client, not a download engine**—it does not download anything 
+itself. Each command is a request sent to a running instance of Motrix, and 
+the actual downloading is performed by Motrix.
+
+## Requirements
+
+- **Node.js ≥ 20**
+- A reachable, running **Motrix** instance (desktop app or server).
+
+## Installation
 
 ```bash
-npm i -g @motrix/cli      # installs the `motrix` command globally
+npm i -g @motrix/cli   # installs the `motrix` command globally
 motrix --help
 ```
 
-Requires Node.js `>=20`. The published artifact is self-contained: the build
-inlines `@motrix/mdxp`, so a global install pulls no `@motrix/*` runtime deps
-(only `commander`).
+The published artifact is self-contained: the build inlines `@motrix/mdxp`, so a
+global install pulls **no `@motrix/*` runtime dependencies** — only `commander`.
 
-> Prefer the desktop app's **Settings → Command-line tools → Install** button if
-> you have Motrix installed — it runs the same `npm i -g @motrix/cli` for you.
+> If you already run the Motrix desktop app, prefer **Settings → Command-line
+> tools → Install**, which runs the same `npm i -g @motrix/cli` for you and
+> verifies your `PATH`.
 
-## Usage
+## Quick start
 
 ```bash
-motrix list [--status <s>] [--limit <n>] [--offset <n>]
-motrix stats
-motrix add <url...> --save-dir <dir> [--filename <name>] [--header "K: V"] [--connections <n>] [--proxy <url>]
-motrix add --magnet <uri> --save-dir <dir> [--select 0,2]
-motrix add --torrent <file.torrent> --save-dir <dir>
-motrix pause <taskId>
-motrix resume <taskId>
-motrix remove <taskId> [--delete-files]
-motrix watch [--task <id>] [--stats]
-motrix pair [--name <label>]
-motrix describe
-motrix skill path | install [dir]
+motrix list                                            # list current tasks
+motrix add https://example.com/f.zip --save-dir ~/Downloads
+motrix watch --stats                                   # stream live progress until Ctrl-C
 ```
 
-Global flags: `--endpoint <url>`, `--token <token>`, `--json`.
+## Commands
 
-### Connection
+| Command | Purpose |
+|---------|---------|
+| `motrix list [--status <s>] [--limit <n>] [--offset <n>]` | List download tasks |
+| `motrix stats` | Aggregate speeds and task counts |
+| `motrix add <url...> --save-dir <dir> [--filename <name>] [--header "K: V"] [--connections <n>] [--proxy <url>]` | Add HTTP(S) / FTP download(s) |
+| `motrix add --magnet <uri> --save-dir <dir> [--select 0,2]` | Add a magnet link |
+| `motrix add --torrent <file.torrent> --save-dir <dir>` | Add a `.torrent` file |
+| `motrix pause <taskId>` | Pause a task |
+| `motrix resume <taskId>` | Resume a task |
+| `motrix remove <taskId> [--delete-files]` | Remove a task |
+| `motrix watch [--task <id>] [--stats]` | Stream progress as NDJSON until interrupted |
+| `motrix pair [--name <label>]` | Pair with a bridge via device code |
+| `motrix describe` | Print the MDXP tool catalog |
+| `motrix skill path \| install [dir]` | Locate / install the bundled agent skill |
 
-By default the CLI auto-discovers a local desktop Motrix via
-`<userData>/bridge/endpoint.json` (port + machine-owner token). For a
-remote/headless server, run `motrix pair` once (device-code approval in the
-Motrix UI); the issued token is stored in `~/.config/motrix/credentials.json`
-(mode 0600) keyed by endpoint and reused automatically. Or pass `--endpoint` +
-`--token` / `MOTRIX_BRIDGE_TOKEN` explicitly.
+Every command also accepts the global flags `--endpoint <url>`, `--token
+<token>`, and `--json`.
 
-### Output contract (agent-facing)
+## Connecting to Motrix
 
-- **TTY** → a human-readable table/summary.
-- **`--json` or piped (non-TTY)** → a single JSON value.
-- **Exit codes**: `0` ok · `2` usage · `3` network (bridge down) · `4` auth
-  (401/403) · `5` server error.
+### Local desktop (zero-config)
 
-### For AI agents
+By default the CLI auto-discovers a running desktop Motrix by reading
+`<userData>/bridge/endpoint.json` (on macOS:
+`~/Library/Application Support/Motrix/bridge/endpoint.json`), which carries the
+bridge port and a machine-owner token. No setup is required.
 
-- `motrix describe --json` emits the MDXP tool catalog — every agent-callable
-  method with its JSON-Schema (2020-12) input/output. Static, no bridge call.
-- `motrix skill install ~/.claude/skills` installs the shipped `SKILL.md` agent
-  skill; `motrix skill path` prints its location.
+### Remote / headless server
 
-## Develop
+Run `motrix pair` once. It performs a device-code exchange over the REST
+`/mdxp/pair/*` routes and prints a verification code; approve that code in the
+Motrix UI. The issued token is stored in `~/.config/motrix/credentials.json`
+(mode `0600`), keyed by endpoint, and reused automatically by later commands.
 
-This repo is standalone (extracted from the Motrix app monorepo). It depends on
-`@motrix/mdxp` from npm and `commander`; there is no sibling-path link.
+### Explicit overrides
+
+- `--endpoint <url>` — e.g. `http://nas.local:16801`
+- `--token <token>` — or the `MOTRIX_BRIDGE_TOKEN` environment variable
+
+## Output and exit codes
+
+The CLI adapts its output to the caller:
+
+- **Interactive TTY** → a human-readable table / summary.
+- **`--json`, or piped / non-TTY stdout** → a single JSON value, ready to parse.
+
+Scripts and agents should branch on the **exit code**:
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `2` | Usage error (bad flags / arguments) |
+| `3` | Network — the bridge is down or unreachable |
+| `4` | Auth — token missing or rejected (re-run `motrix pair`) |
+| `5` | Server — the bridge returned a JSON-RPC error |
+
+**Version drift.** If the target Motrix does not recognize a method this CLI
+sends (JSON-RPC `-32601`), or exposes no `/mdxp` bridge at all (HTTP 404), the
+command fails with exit code `5` and a clear message asking you to update Motrix
+or the CLI — never a raw protocol error. In `--json` mode the original JSON-RPC
+`code` is preserved under `data` so callers can still branch programmatically.
+
+## AI agent integration
+
+`motrix` is designed to be driven safely by autonomous agents.
+
+- **`motrix describe --json`** emits the authoritative MDXP tool catalog — every
+  agent-callable method with its JSON-Schema (draft 2020-12) `inputSchema` and
+  `outputSchema`. It is static (no bridge call) and always reflects the protocol
+  version the CLI was built against, so it cannot drift from what the commands
+  actually send. Use it to learn exact parameter shapes instead of guessing.
+- **`motrix skill install [dir]`** installs the bundled `SKILL.md` agent skill
+  (default `~/.claude/skills`, namespaced under `motrix/`); **`motrix skill
+  path`** prints its location.
+
+See [`SKILL.md`](./SKILL.md) for the agent-facing usage contract.
+
+## Development
+
+This repository is standalone (extracted from the Motrix app monorepo). It
+depends on `@motrix/mdxp` from npm and `commander`; there is no sibling-path
+link.
 
 ```bash
 pnpm install
-pnpm build     # tsup → dist/bin/motrix.js (mdxp inlined, commander external)
-pnpm test      # vitest
-pnpm lint      # biome check .
+pnpm build       # tsup → dist/bin/motrix.js (mdxp inlined, commander external)
+pnpm test        # vitest
+pnpm typecheck   # tsc --noEmit
+pnpm lint        # biome check .
 node dist/bin/motrix.js --help
 ```
 
-The build is self-contained: `tsup`'s `noExternal: [/^@motrix\//]` inlines
-`@motrix/mdxp` into the bundle, so the artifact runs without a
-`node_modules/@motrix/mdxp`. `commander` stays a normal runtime dependency,
-installed by npm on `npm i -g @motrix/cli`.
-
-## Publishing
-
-Releases go to npm as `@motrix/cli` (public). `prepublishOnly` runs `pnpm build`
-so the gitignored `dist/` is regenerated into the tarball. `files` ships `dist`,
-`SKILL.md` (consumed at runtime by `motrix skill install` / `path`), and
-`README.md`.
-
-```bash
-npm publish --dry-run   # inspect the tarball first
-npm publish             # public release
-```
+`tsup`'s `noExternal: [/^@motrix\//]` inlines `@motrix/mdxp` into the single-file
+bundle, so the artifact runs without a `node_modules/@motrix/mdxp`. `commander`
+stays a normal runtime dependency, installed by npm on `npm i -g @motrix/cli`.
 
 ## License
 
-MIT © Motrix
+[MIT](./LICENSE) © Motrix
