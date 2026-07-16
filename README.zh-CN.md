@@ -94,7 +94,7 @@ CLI 会根据调用方自动调整输出：
 | `4` | 认证——token 缺失或被拒（重新运行 `motrix pair`） |
 | `5` | 服务端——bridge 返回了 JSON-RPC error |
 | `6` | 未安装——无法启动 Motrix 桌面 app（`motrix open`） |
-| `7` | self-update 失败——安装源不支持、安装器报错或安装后验证不匹配(`motrix self-update`) |
+| `7` | self-update 失败——安装源不支持、安装器报错或安装后验证不匹配（`motrix self-update`） |
 
 **版本漂移。** 如果目标 Motrix 不认识本 CLI 发送的某个方法（JSON-RPC `-32601`），或根本
 没有暴露 `/mdxp` bridge（HTTP 404），命令会以退出码 `5` 失败，并给出清晰的"请升级 Motrix

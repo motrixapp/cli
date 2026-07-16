@@ -15,21 +15,40 @@ export type RunCommand = (
 ) => Promise<RunResult>
 
 /**
+ * Quote a single argument for cmd.exe. `spawn(..., { shell: true })` on
+ * win32 hands `cmd+args` to `cmd.exe /d /s /c`, which joins them with plain
+ * spaces and applies no quoting of its own. Two consequences: an arg with an
+ * embedded space (e.g. a path under `C:\Users\John Smith\...`) splits into
+ * multiple argv entries, and `^` — cmd.exe's escape character — is consumed
+ * before the target program ever sees it (so `^0.2.0` becomes `0.2.0`).
+ * Wrapping in double quotes fixes both: cmd.exe keeps a quoted string as one
+ * argument, and treats `^` literally while inside quotes. Embedded `"` are
+ * doubled, cmd.exe's own escape for a literal quote inside a quoted string.
+ */
+export function escapeForCmdShell(arg: string): string {
+  return `"${arg.replaceAll('"', '""')}"`
+}
+
+/**
  * Buffered, non-interactive command runner. stdin is ignored and output is
  * captured, not streamed: npm can prompt mid-install, and a hidden prompt on
  * piped stdio reads as a hang — captured output is printed only on failure.
  * On win32 the package-manager entry points are `.cmd` shims, which Node
  * refuses to spawn without a shell (EINVAL, CVE-2024-27980), so a shell is
- * used there; callers must pass only validated arguments (see SPEC_RE in
- * commands/self-update.ts). A shell also means spawn failures surface as a
- * non-zero exit instead of `code: null` on win32.
+ * used there; args are cmd.exe-quoted (`escapeForCmdShell`) before being
+ * handed to `spawn` so that paths with spaces and `^`-containing ranges
+ * survive cmd.exe's own parsing — `cmd` itself is left alone since our
+ * commands are always bare names (`npm`, `node`, ...). A shell also means
+ * spawn failures surface as a non-zero exit instead of `code: null` on
+ * win32.
  */
 export const runCommand: RunCommand = (cmd, args, opts) =>
   new Promise((resolve) => {
-    const child = spawn(cmd, args, {
+    const useShell = process.platform === 'win32'
+    const child = spawn(cmd, useShell ? args.map(escapeForCmdShell) : args, {
       cwd: opts?.cwd,
       stdio: ['ignore', 'pipe', 'pipe'],
-      shell: process.platform === 'win32',
+      shell: useShell,
     })
     let stdout = ''
     let stderr = ''

@@ -34,6 +34,7 @@ function ctx(over: Partial<SelfUpdateCtx> = {}): SelfUpdateCtx {
     currentVersion: '0.2.1',
     argv1: NPM_BIN,
     env: {},
+    execPath: 'node',
     realpath: async (p) => p,
     runCommand: scriptedRun({}),
     tmpdir: '/tmp',
@@ -320,5 +321,59 @@ describe('runSelfUpdate — install and verify', () => {
       ['add', '-g', '@motrix/cli@0.3.0'],
       { cwd: '/tmp' }
     )
+  })
+
+  it('degrades to a warning-only PATH check when `pnpm root -g` itself breaks (pnpm/pnpm#11528)', async () => {
+    const c = ctx({
+      argv1: PNPM_BIN,
+      runCommand: scriptedRun({
+        root: { code: 1, stdout: '', stderr: 'broken' },
+      }),
+      whichBin: async () => null,
+    })
+    const r = await runSelfUpdate({}, c)
+    expect(r).toMatchObject({ ok: true, changed: true, method: 'pnpm-global' })
+    expect(r.warning).toBeDefined()
+  })
+
+  it('fails verify when the installed entry does not run at all', async () => {
+    const r = await runSelfUpdate(
+      {},
+      ctx({
+        runCommand: scriptedRun({
+          nodeVersion: { code: 1, stdout: '', stderr: 'boom' },
+        }),
+      })
+    )
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'verify-failed',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+    })
+    expect(r.manualCommand).toBe('npm install -g @motrix/cli@0.3.0')
+  })
+
+  it('reports an installer spawn failure (e.g. ENOENT) as install-failed', async () => {
+    const r = await runSelfUpdate(
+      {},
+      ctx({
+        runCommand: scriptedRun({
+          install: {
+            code: null,
+            stdout: '',
+            stderr: '',
+            spawnError: Object.assign(new Error('ENOENT'), {
+              code: 'ENOENT',
+            }),
+          },
+        }),
+      })
+    )
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'install-failed',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+    })
+    expect(r.message).toContain('spawn error')
   })
 })

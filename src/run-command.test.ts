@@ -1,5 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import { runCommand } from './run-command'
+import { escapeForCmdShell, runCommand } from './run-command'
+
+describe('escapeForCmdShell', () => {
+  it('wraps a plain arg in double quotes', () => {
+    expect(escapeForCmdShell('arg')).toBe('"arg"')
+  })
+
+  it('quotes an arg containing spaces so cmd.exe keeps it as one argument', () => {
+    expect(escapeForCmdShell('C:\\Users\\John Smith\\motrix.js')).toBe(
+      '"C:\\Users\\John Smith\\motrix.js"'
+    )
+  })
+
+  it('doubles embedded double quotes', () => {
+    expect(escapeForCmdShell('a"b')).toBe('"a""b"')
+  })
+
+  it('leaves ^ unchanged inside the quotes (cmd.exe treats it literally there)', () => {
+    expect(escapeForCmdShell('^0.2.0')).toBe('"^0.2.0"')
+  })
+})
 
 describe('runCommand', () => {
   it('captures stdout and the exit code', async () => {

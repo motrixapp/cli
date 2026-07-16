@@ -15,6 +15,7 @@ function ctx(over: Partial<DetectCtx> = {}): DetectCtx {
     runCommand: vi
       .fn()
       .mockResolvedValue({ code: 0, stdout: `${NPM_ROOT}\n`, stderr: '' }),
+    tmpdir: '/tmp',
     ...over,
   }
 }
@@ -158,13 +159,21 @@ describe('detectInstallSource — executable sources', () => {
           ? `${NPM_ROOT}/@motrix/cli/dist/bin/motrix.js`
           : p
       )
+    const runCommand = vi
+      .fn()
+      .mockResolvedValue({ code: 0, stdout: `${NPM_ROOT}\n`, stderr: '' })
     const r = await detectInstallSource(
-      ctx({ argv1: '/usr/local/bin/motrix', realpath })
+      ctx({ argv1: '/usr/local/bin/motrix', realpath, runCommand })
     )
     expect(r).toMatchObject({
       executable: true,
       kind: 'npm-global',
       globalRoot: NPM_ROOT,
+    })
+    // The probe runs from tmpdir, not the CLI's cwd — a project-local
+    // .npmrc must not be able to skew it.
+    expect(runCommand).toHaveBeenCalledWith('npm', ['root', '-g'], {
+      cwd: '/tmp',
     })
   })
 })
