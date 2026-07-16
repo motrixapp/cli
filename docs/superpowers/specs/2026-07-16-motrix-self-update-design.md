@@ -132,7 +132,7 @@ detected source is pnpm, fall back to `pnpm view`. Parsing:
 
 ### Step 4 — `--dry-run` stops here
 
-Reports `{ from, to, method, wouldRun }`, exit `0`.
+Reports `{ from, to, method, command }`, exit `0`.
 
 ### Step 5 — delegate the install
 
@@ -196,9 +196,9 @@ Every `7` payload carries `manualCommand`, and its human message ends with
   ```
 
   No-op: `{ "ok": true, "changed": false, "reason": "already-up-to-date",
-  "current": "0.2.1", "resolved": "0.2.1" }`. Dry run adds
-  `"dryRun": true, "wouldRun": "..."`. Failures use the standard CLI error
-  JSON with `reason` + `manualCommand`.
+  "from": "0.2.1", "to": "0.2.1" }` — one uniform shape, `from`/`to` on every
+  outcome. Dry run adds `"dryRun": true` (the installer command rides the
+  same `command` field). Failures carry `reason` + `manualCommand`.
 
 ## Caveats
 
