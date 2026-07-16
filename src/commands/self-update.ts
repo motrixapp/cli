@@ -75,8 +75,6 @@ export interface SelfUpdateCtx {
  *  the installer legitimately runs through a shell on Windows. */
 const SPEC_RE = /^[A-Za-z0-9._^~*+-]+$/
 
-const NPM_MANUAL = `npm install -g ${OWN_PACKAGE}@latest`
-
 /**
  * `motrix self-update [target]` — pnpm's self-update UX translated to an
  * npm-distributed CLI: detect who installed us, resolve the target to one
@@ -102,13 +100,18 @@ export async function runSelfUpdate(
     }
   }
   if (!ctx.currentVersion) {
+    // We can't even read our own package.json, so we don't know which manager
+    // installed us. Deliberately DON'T hand back a runnable `npm i -g`: an
+    // agent treats `manualCommand` as an instruction, and running npm for a
+    // pnpm/yarn/bun install creates a second, PATH-shadowing copy.
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
       changed: false,
       reason: 'unknown-install',
-      manualCommand: NPM_MANUAL,
-      message: `cannot determine the installed version. You can reinstall manually: ${NPM_MANUAL}`,
+      message:
+        'cannot determine the installed version — reinstall with the package ' +
+        'manager you originally used (npm, pnpm, yarn, bun, or volta).',
     }
   }
 
@@ -126,22 +129,26 @@ export async function runSelfUpdate(
         : source.kind === 'unknown'
           ? 'unknown-install'
           : 'unsupported-ephemeral'
-    // For a genuinely unknown source we must NOT present npm as THE fix:
-    // if the CLI was actually installed by another manager, `npm i -g`
-    // creates a second, PATH-shadowing copy — the exact failure this whole
-    // command exists to prevent. Point the user at their own manager instead.
+    // For a genuinely unknown source we must NOT present npm as THE fix — and
+    // must not put a runnable npm command in `manualCommand` either: an agent
+    // treats that field as an instruction, and `npm i -g` for a pnpm/yarn/bun
+    // install creates a second, PATH-shadowing copy — the exact failure this
+    // whole command exists to prevent. Point the user at their own manager.
     const message =
       source.kind === 'unknown'
         ? `${source.reason} — update it with the same tool you used to install it ` +
-          `(npm, pnpm, yarn, bun, or volta). Running \`${source.manualCommand}\` ` +
-          `blindly may create a second, PATH-shadowing copy.`
+          `(npm, pnpm, yarn, bun, or volta). Running \`npm i -g\` blindly may ` +
+          `create a second, PATH-shadowing copy.`
         : `${source.reason}. You can run it manually: ${source.manualCommand}`
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
       changed: false,
       reason,
-      manualCommand: source.manualCommand,
+      // Only ephemeral runs (npx/dlx/bunx) and checkout carry a safe, runnable
+      // command; `unknown` deliberately carries none.
+      manualCommand:
+        source.kind === 'unknown' ? undefined : source.manualCommand,
       message,
     }
   }
@@ -208,6 +215,9 @@ export async function runSelfUpdate(
   const inst = await ctx.runCommand(installArgs[0], installArgs.slice(1), {
     cwd: ctx.neutralDir,
   })
+  const rollback = installArgsFor(source.kind, `${OWN_PACKAGE}@${from}`).join(
+    ' '
+  )
   if (inst.code !== 0) {
     const output = `${inst.stdout}${inst.stderr}`.trim()
     const eaccesHint = /EACCES|EPERM/.test(inst.stderr)
@@ -217,18 +227,54 @@ export async function runSelfUpdate(
       inst.code === null
         ? `spawn error (${inst.spawnError?.code ?? 'unknown'})`
         : `exit ${inst.code}`
+    const prefix = `installer failed (${exitDesc})${output ? `:\n${output}` : ''}${eaccesHint}`
+    // A non-zero exit does NOT prove the tree is untouched — a package manager
+    // can replace files and then fail (lifecycle script, disk, dep resolution).
+    // Observe what is actually installed before claiming anything about state.
+    const observed = await observeInstalledVersion(source, ctx)
+    if (observed === to) {
+      // The target is live despite the error — treat as success, but surface it.
+      return {
+        ok: true,
+        exitCode: EXIT.OK,
+        changed: true,
+        from,
+        to,
+        method: source.kind,
+        command,
+        warning: `${prefix}\n…but ${OWN_PACKAGE} ${to} is now active`,
+        message: `Updated ${OWN_PACKAGE} ${from} → ${to} (${source.kind}), with installer warnings`,
+      }
+    }
+    if (observed === from) {
+      // Old version still intact — safe to retry the forward install.
+      return {
+        ok: false,
+        exitCode: EXIT.SELF_UPDATE_FAILED,
+        changed: false,
+        reason: 'install-failed',
+        from,
+        to,
+        method: source.kind,
+        manualCommand: command,
+        message: `${prefix}\nYour existing ${from} is intact. Retry: ${command}`,
+      }
+    }
+    // Indeterminate: could not confirm `from` is still runnable, so the tree
+    // may be partially updated or broken. Point recovery at a rollback.
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
-      changed: false,
+      changed: true,
       reason: 'install-failed',
       from,
       to,
       method: source.kind,
-      manualCommand: command,
+      manualCommand: rollback,
       message:
-        `installer failed (${exitDesc})${output ? `:\n${output}` : ''}${eaccesHint}` +
-        `\nYou can run it manually: ${command}`,
+        `${prefix}\n${OWN_PACKAGE} could not be confirmed afterwards (now reports ` +
+        `${observed ?? 'nothing'}); it may be partially updated. Check ` +
+        `\`motrix --version\`; to restore ${from}, run: ${rollback}`,
     }
   }
 
@@ -242,9 +288,6 @@ export async function runSelfUpdate(
     // perfectly good install (e.g. a stale entry-path assumption), and
     // downgrading a healthy install — plus a second fallible mutation — is
     // worse than surfacing the state and the exact command.
-    const rollback = installArgsFor(source.kind, `${OWN_PACKAGE}@${from}`).join(
-      ' '
-    )
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
@@ -284,59 +327,102 @@ interface VerifyOutcome {
 }
 
 /**
- * npm/pnpm can report their global root, so the fresh entry file is invoked
- * directly (PATH-independent) and must report the exact target version. For
- * yarn/bun/volta — and when the root query itself breaks (pnpm/pnpm#11528) —
- * fall back to a PATH check that only ever WARNS: the installer already
- * reported success, and a mismatch there usually means another install
- * shadows the updated one.
+ * Confirm the update reached the installation the user actually runs.
+ *
+ * For `npm-global` we bound the global root to the running entry at detection
+ * (realpath containment), so the entry inside THAT root is provably the tree
+ * we set out to update — and immune to PATH shadowing. For every other kind we
+ * cannot prove which tree the PATH package manager wrote to (e.g. a second
+ * pnpm with a different global root), so we verify the OUTCOME the user gets:
+ * what `motrix` on PATH reports now. A mismatch there is a FAILURE, not a
+ * warning — a caller must not read exit 0 when its `motrix` still runs the old
+ * version. The one warning-only case is "nothing named `motrix` is on PATH
+ * yet" (e.g. a freshly-created PNPM_HOME/volta bin dir not in this shell): we
+ * installed successfully but cannot confirm from here.
  */
 async function verifyInstall(
   source: InstallSource & { executable: true },
   expected: string,
   ctx: SelfUpdateCtx
 ): Promise<VerifyOutcome> {
-  if (source.kind === 'npm-global' || source.kind === 'pnpm-global') {
-    const pm = source.kind === 'npm-global' ? 'npm' : 'pnpm'
-    let root = source.globalRoot ?? null
-    if (!root) {
-      const res = await ctx.runCommand(pm, ['root', '-g'], {
-        cwd: ctx.neutralDir,
-      })
-      root = res.code === 0 ? res.stdout.trim() || null : null
+  if (source.kind === 'npm-global' && source.globalRoot) {
+    const entry = join(
+      source.globalRoot,
+      '@motrix',
+      'cli',
+      'dist',
+      'bin',
+      'motrix.js'
+    )
+    const got = await runVersion(ctx, ctx.execPath, [entry, '--version'])
+    if (got !== expected) {
+      return {
+        ok: false,
+        detail:
+          got == null
+            ? `the updated entry did not run (${entry})`
+            : `the updated entry reports ${got}, expected ${expected}`,
+      }
     }
-    if (root) {
-      const entry = join(root, '@motrix', 'cli', 'dist', 'bin', 'motrix.js')
-      const res = await ctx.runCommand(ctx.execPath, [entry, '--version'], {
-        cwd: ctx.neutralDir,
-      })
-      if (res.code === 0) {
-        const got = res.stdout.trim()
-        if (got === expected) return { ok: true }
+    // The bound tree is at `expected`. If PATH resolves `motrix` elsewhere,
+    // that is a shadow, not a failure — surface it as a non-fatal warning.
+    const bin = await ctx.whichBin('motrix')
+    if (bin) {
+      const onPath = await runVersion(ctx, bin, ['--version'])
+      if (onPath !== expected) {
         return {
-          ok: false,
-          detail: `installed entry reports ${got || '(nothing)'}, expected ${expected}`,
+          ok: true,
+          warning: `updated your npm-global install to ${expected}, but \`motrix\` on PATH (${bin}) reports ${onPath ?? 'an error'} — another install is shadowing it`,
         }
       }
-      return { ok: false, detail: `installed entry did not run (${entry})` }
     }
-    // root query failed — degrade to the warning-only PATH check
+    return { ok: true }
   }
+
   const bin = await ctx.whichBin('motrix')
   if (!bin) {
     return {
       ok: true,
-      warning:
-        'could not find `motrix` on PATH to verify — open a new shell and check `motrix --version`',
+      warning: `installed ${expected}, but \`motrix\` is not on PATH in this shell — open a new shell and run \`motrix --version\` to confirm`,
     }
   }
-  const res = await ctx.runCommand(bin, ['--version'], { cwd: ctx.neutralDir })
-  const got = res.code === 0 ? res.stdout.trim() : null
-  if (got === expected) return { ok: true }
+  const onPath = await runVersion(ctx, bin, ['--version'])
+  if (onPath === expected) return { ok: true }
   return {
-    ok: true,
-    warning: `\`motrix\` on PATH (${bin}) reports ${got ?? 'an error'}, not ${expected} — another install may be shadowing the updated one`,
+    ok: false,
+    detail: `\`motrix\` on PATH (${bin}) reports ${onPath ?? 'an error'}, not ${expected} — the update may have targeted a different installation`,
   }
+}
+
+/** The version the installation we run currently reports, or null if it can't
+ *  be determined — the bound npm entry when known, else `motrix` on PATH. */
+async function observeInstalledVersion(
+  source: InstallSource & { executable: true },
+  ctx: SelfUpdateCtx
+): Promise<string | null> {
+  if (source.kind === 'npm-global' && source.globalRoot) {
+    const entry = join(
+      source.globalRoot,
+      '@motrix',
+      'cli',
+      'dist',
+      'bin',
+      'motrix.js'
+    )
+    return runVersion(ctx, ctx.execPath, [entry, '--version'])
+  }
+  const bin = await ctx.whichBin('motrix')
+  return bin ? runVersion(ctx, bin, ['--version']) : null
+}
+
+/** Run `<cmd> <args>` and return trimmed stdout on exit 0, else null. */
+async function runVersion(
+  ctx: SelfUpdateCtx,
+  cmd: string,
+  args: string[]
+): Promise<string | null> {
+  const res = await ctx.runCommand(cmd, args, { cwd: ctx.neutralDir })
+  return res.code === 0 ? res.stdout.trim() : null
 }
 
 /** Minimal cross-platform `which`: the first PATH entry holding an existing

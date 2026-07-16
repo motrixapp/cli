@@ -130,11 +130,20 @@ npm 不存在(spawn `ENOENT`)且检测源为 pnpm,退回 `pnpm view`。解析:
 ### 第 5 步 — 委托安装
 
 从**中立目录**(见下方方框)spawn `installArgs`,输出全部 buffer
-(npm 可能在安装中途弹交互提示;半显示的管道输出看起来像卡死)。非零退出:
-打印 buffer 的输出和手动命令,以 `EXIT.SELF_UPDATE_FAILED (7)` 失败。若
+(npm 可能在安装中途弹交互提示;半显示的管道输出看起来像卡死)。若
 stderr 含 `EACCES` / `EPERM`,附上 npm 官方的 prefix 迁移指引
 (docs.npmjs.com → "Resolving EACCES permissions errors")——**绝不建议
 sudo**。
+
+非零退出**并不能证明树未被改动**——包管理器可能先替换文件再失败(生命周期
+脚本、磁盘、依赖解析)。因此任何非零退出后,**观测实际装出的版本**(第 6 步
+的观测:npm 查绑定 root,其余查 PATH),再分支:
+
+- 观测 == `from` → 旧版完好 → `install-failed`,`changed: false`,
+  `manualCommand` = 正向安装(可安全重试)。
+- 观测 == `to` → 目标版竟已生效 → **成功**,并把安装器输出作为 warning 呈现。
+- 观测为其他/无法运行 → 不确定、可能部分更新 → `install-failed`,
+  `changed: true`,`manualCommand` = **回滚到 `from`**。
 
 > **中立工作目录(安全)。** 所有包管理器子进程——`npm root -g`(检测)、
 > `npm/pnpm view`(解析)、安装器、验证运行——都用 `cwd = os.homedir()`,
@@ -147,17 +156,33 @@ sudo**。
 
 ### 第 6 步 — 验证
 
-- **npm / pnpm**(可经 `npm root -g` / `pnpm root -g` 获得全局根):spawn
-  `node <root>/@motrix/cli/dist/bin/motrix.js --version`——绕开 PATH,
-  跨平台。输出 ≠ 解析目标 → `SELF_UPDATE_FAILED (7)`。若 root 查询本身
-  失败(`pnpm root -g` 曾随 pnpm 全局布局变化而损坏,pnpm/pnpm#11528),
-  降级为下述仅警告的 PATH 检查,而非硬失败。
-- **yarn / bun / volta**:仅做 PATH 检查——用可注入的 PATH 查找解析出
-  `motrix` 并跑 `--version`。不一致 → **成功但给遮蔽警告**(包管理器已报告
-  成功;PATH 更靠前存在另一个安装是最可能的原因),绝不硬失败。
+验证必须确认更新落到了**用户实际运行的那份安装**——而不仅仅是"某处某个安装
+现在有目标版本"。
+
+- **npm**(检测时绑定 root):只有 npm 捕获了 `globalRoot`——检测已用
+  realpath 包含关系证明运行入口位于 `npm root -g` 之内。故 spawn
+  `node <globalRoot>/@motrix/cli/dist/bin/motrix.js --version`(绕开 PATH、
+  跨平台)。不匹配/无法运行 → `SELF_UPDATE_FAILED (7)`。若匹配,再额外查
+  PATH 上的 `motrix`;此处 PATH 不一致是**遮蔽而非失败** → 成功带 warning
+  (我们已*证明*绑定的树在目标版本)。
+- **pnpm / yarn / bun / volta**(未绑定 root):无法证明 PATH 上的包管理器写到
+  了哪棵树——另一个 global root 不同的 pnpm 会让一次新鲜的 `pnpm root -g`
+  检查通过、却把运行的那份安装原封不动。故验证**用户实际得到的结果**:PATH 上
+  的 `motrix` 现在报什么版本。匹配 → 成功。不匹配或无法运行 →
+  `SELF_UPDATE_FAILED (7)`(**不是**警告——当用户的 `motrix` 仍跑旧版时,调用方
+  绝不能读到 exit 0)。唯一仅警告的情形是"PATH 上还没有 `motrix`"(如新建的
+  PNPM_HOME/volta bin 目录尚未进入当前 shell):已安装,但此处无法确认。
+  - 我们刻意不再在验证时调用 `pnpm root -g`(它可能指向另一个 pnpm——正是
+    错误树误报成功的根源)。
 - Windows 备注:安装器会中途改写正在运行的命令的 `.cmd`/`.ps1` shim。这是
   安全的——node 已把 JS 载入内存——但命令在验证后立即打印结果并退出,
   安装之后不再运行其他逻辑。
+
+> **残留边界。** 在两个同名包管理器、global root 不同、且更新后*错误*那个恰好
+> 更靠前于 PATH 的病态情形下,PATH 检查仍可能读到目标版本而误报成功。彻底封堵
+> 需要为每个包管理器做 root/prefix 绑定(而 `pnpm root -g` 本身不可靠);鉴于
+> npm-global 是实际主流安装且*已*绑定,我们接受此边界并记录在案,而不去堆砌
+> 脆弱的逐包管理器探测。
 
 ## 退出码与错误分类
 
@@ -174,9 +199,15 @@ sudo**。
 | registry 解析失败 / 网络 | `3` NETWORK | `resolve-failed` |
 | npx / dlx / bunx 一次性运行 | `7` | `unsupported-ephemeral` |
 | 从 checkout 运行 | `7` | `unsupported-checkout` |
-| 未知安装源 | `7` | `unknown-install` |
-| 安装器非零退出(树未改动) | `7` | `install-failed`(`changed: false`) |
-| 安装后验证不匹配(npm/pnpm) | `7` | `verify-failed`(`changed: true`) |
+| 未知安装源 | `7` | `unknown-install`(无 `manualCommand`) |
+| 安装器失败、旧版完好 | `7` | `install-failed`(`changed: false`,`manualCommand` = 重试) |
+| 安装器失败、状态无法确认 | `7` | `install-failed`(`changed: true`,`manualCommand` = 回滚) |
+| 安装后验证不匹配 | `7` | `verify-failed`(`changed: true`,`manualCommand` = 回滚) |
+
+**`unknown-install` 不带 `manualCommand`。** agent 会把该字段当成要执行的命令;
+对 pnpm/yarn/bun 安装盲跑 `npm i -g` 会造出本命令要防的 PATH 影子副本。两条
+unknown 路径(安装源无法归类;自身版本不可读)都只返回建议性文字——"用你当初
+安装用的包管理器重装"——不给可运行命令。
 
 **`verify-failed` 是"已部分改动"的状态,而非 no-op。** 安装器已 exit `0`,
 全局树*已*被改动——结果报 `changed: true`(尽管 `ok: false`),`manualCommand`
