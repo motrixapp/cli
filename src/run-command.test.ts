@@ -1,29 +1,56 @@
 import { describe, expect, it } from 'vitest'
-import { escapeForCmdShell, isCommandMissing, runCommand } from './run-command'
+import {
+  escapeCmdArgument,
+  escapeCmdCommand,
+  isCommandMissing,
+  runCommand,
+} from './run-command'
 
-describe('escapeForCmdShell', () => {
-  it('wraps a plain arg in double quotes', () => {
-    expect(escapeForCmdShell('arg')).toBe('"arg"')
+// Expected outputs mirror cross-spawn's escape.js exactly (the CVE-2024-27980
+// reference). They look busy because they are correct: under `cmd /c` a `^"`
+// collapses to a literal `"` for CommandLineToArgvW, `^ ` to a literal space.
+describe('escapeCmdArgument', () => {
+  it('wraps a plain arg and caret-escapes the added quotes', () => {
+    expect(escapeCmdArgument('arg')).toBe('^"arg^"')
   })
 
-  it('quotes an arg containing spaces so cmd.exe keeps it as one argument', () => {
-    expect(escapeForCmdShell('C:\\Users\\John Smith\\motrix.js')).toBe(
-      '"C:\\Users\\John Smith\\motrix.js"'
+  it('caret-escapes spaces inside the arg (path with a space)', () => {
+    expect(escapeCmdArgument('C:\\Users\\John Smith\\motrix.js')).toBe(
+      '^"C:\\Users\\John^ Smith\\motrix.js^"'
     )
   })
 
-  it('doubles embedded double quotes', () => {
-    expect(escapeForCmdShell('a"b')).toBe('"a""b"')
+  it('doubles backslash runs before a quote and escapes the quote (argv layer)', () => {
+    // a\"b : the pre-quote backslash run is doubled, then the quote escaped.
+    expect(escapeCmdArgument('a"b')).toBe('^"a\\^"b^"')
   })
 
-  it('leaves ^ unchanged inside the quotes (cmd.exe treats it literally there)', () => {
-    expect(escapeForCmdShell('^0.2.0')).toBe('"^0.2.0"')
+  it('caret-escapes ^ so a caret range survives cmd.exe', () => {
+    expect(escapeCmdArgument('^0.2.0')).toBe('^"^^0.2.0^"')
   })
 
-  it('quotes the command itself the same way (e.g. the default Windows node.exe path)', () => {
-    expect(escapeForCmdShell('C:\\Program Files\\nodejs\\node.exe')).toBe(
-      '"C:\\Program Files\\nodejs\\node.exe"'
+  it('neutralizes % and ! (which double-quotes alone do NOT stop in cmd.exe)', () => {
+    expect(escapeCmdArgument('a%b!c')).toBe('^"a^%b^!c^"')
+  })
+
+  it('double-escapes metacharacters for a .cmd/.bat shim (BatBadBut)', () => {
+    expect(escapeCmdArgument('a&b', true)).toBe('^^^"a^^^&b^^^"')
+  })
+
+  it('leaves a normal package spec free of metacharacters intact (only the wrap escapes)', () => {
+    expect(escapeCmdArgument('@motrix/cli@0.3.0')).toBe('^"@motrix/cli@0.3.0^"')
+  })
+})
+
+describe('escapeCmdCommand', () => {
+  it('caret-escapes a command path with a space, without quoting it', () => {
+    expect(escapeCmdCommand('C:\\Program Files\\nodejs\\node.exe')).toBe(
+      'C:\\Program^ Files\\nodejs\\node.exe'
     )
+  })
+
+  it('leaves a bare command name untouched', () => {
+    expect(escapeCmdCommand('npm')).toBe('npm')
   })
 })
 

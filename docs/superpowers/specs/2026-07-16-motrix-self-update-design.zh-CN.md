@@ -188,6 +188,14 @@ sudo**。
   `ENOENT`,在 Windows 上则经 cmd.exe 以 `9009` 退出。`run-command` 把两者归一
   为 `commandMissing` 标志,于是 pnpm-only 的 Windows registry 回退才会真正触发
   (旧的 `code === null` 检查会静默漏掉)。
+- **Windows 参数转义**采用 cross-spawn 的两层算法(`escapeCmdCommand` /
+  `escapeCmdArgument`):反斜杠串加倍 + 引号包裹(CommandLineToArgvW 层),再对
+  元字符做 caret 转义,`.cmd`/`.bat` shim(npm/pnpm/yarn)因 cmd.exe 二次解析而
+  双重转义——即 CVE-2024-27980("BatBadBut")缓解。它与 Node 的 `shell: true`
+  组合等价(Node 生成的正是 cross-spawn 手工构造的同一条 `cmd.exe /d /s /c "…"`)。
+  唯一用户可控参数(version spec)已被 `SPEC_RE` 约束,故这是纵深防御——主要针对
+  可能出现在 Windows 用户目录路径里的元字符(`%`、`!`、空格)。超时路径上的
+  `taskkill` 用 `%SystemRoot%` 绝对路径解析,而非 PATH。
 - Windows 备注:安装器会中途改写正在运行的命令的 `.cmd`/`.ps1` shim。这是
   安全的——node 已把 JS 载入内存——但命令在验证后立即打印结果并退出,
   安装之后不再运行其他逻辑。

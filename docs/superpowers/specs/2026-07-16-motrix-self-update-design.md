@@ -217,6 +217,17 @@ actually runs** — not merely that *some* install somewhere now has the target.
   Windows. `run-command` normalizes both into a `commandMissing` flag, so the
   pnpm-only-on-Windows registry fallback actually fires (the old `code === null`
   check silently missed it).
+- **Windows argument escaping** uses the cross-spawn two-layer algorithm
+  (`escapeCmdCommand` / `escapeCmdArgument`): backslash-run doubling + quote
+  wrap (the CommandLineToArgvW layer) then metacharacter caret-escaping,
+  doubled for `.cmd`/`.bat` shims (npm/pnpm/yarn) which cmd.exe re-parses — the
+  CVE-2024-27980 "BatBadBut" mitigation. This composes with Node's
+  `shell: true` (which builds the same `cmd.exe /d /s /c "…"` invocation
+  cross-spawn constructs by hand). The primary user-controlled argument (the
+  version spec) is already constrained by `SPEC_RE`, so this is defence in
+  depth — chiefly for metacharacters (`%`, `!`, spaces) that can appear in a
+  Windows profile path. `taskkill` on the timeout path is resolved by absolute
+  `%SystemRoot%` path, not PATH.
 - Windows note: the installer rewrites the running command's `.cmd`/`.ps1`
   shims mid-flight. Safe — node already holds the JS in memory — but the
   command prints its result and exits promptly after verification; nothing
