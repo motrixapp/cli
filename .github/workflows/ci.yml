@@ -31,6 +31,11 @@ jobs:
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
+        with:
+          # pnpm 11 needs node >= 22.13 to run itself; the standalone binary
+          # bundles its own runtime so the node 20 matrix jobs can still
+          # exercise the project's engines.node floor with PATH node 20.
+          standalone: true
 
       - name: Setup Node.js ${{ matrix.node }}
         uses: actions/setup-node@v4
