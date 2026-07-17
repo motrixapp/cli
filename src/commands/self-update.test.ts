@@ -231,23 +231,31 @@ describe('runSelfUpdate — install and verify', () => {
     expect(c.runCommand).toHaveBeenCalledWith(
       'npm',
       ['install', '-g', '@motrix/cli@0.3.0'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
     expect(c.runCommand).toHaveBeenCalledWith(
       'node',
       [`${NPM_ROOT}/@motrix/cli/dist/bin/motrix.js`, '--version'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
   })
 
   it('updates via pnpm with the pnpm installer args', async () => {
-    const c = ctx({ argv1: PNPM_BIN })
+    // pnpm is unbound, so verification is by PATH: give it a resolvable bin
+    // reporting the target so the happy path confirms.
+    const c = ctx({
+      argv1: PNPM_BIN,
+      whichBin: async () => '/Users/x/Library/pnpm/motrix',
+      runCommand: scriptedRun({
+        binVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+      }),
+    })
     const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'pnpm-global' })
     expect(c.runCommand).toHaveBeenCalledWith(
       'pnpm',
       ['add', '-g', '@motrix/cli@0.3.0'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
   })
 
@@ -363,7 +371,10 @@ describe('runSelfUpdate — install and verify', () => {
       exitCode: EXIT.SELF_UPDATE_FAILED,
       method: 'yarn-global',
     })
-    expect(r.manualCommand).toBe('yarn global add @motrix/cli@0.2.1')
+    // Unbound manager → no runnable rollback (it could hit a different tree);
+    // the recovery is advisory.
+    expect(r.manualCommand).toBeUndefined()
+    expect(r.message).toContain('different installation')
   })
 
   it('succeeds (no warning) when a yarn install`s motrix on PATH reports the target', async () => {
@@ -395,41 +406,57 @@ describe('runSelfUpdate — install and verify', () => {
     expect(r.warning).toContain('shadowing')
   })
 
-  it('succeeds with a warning when no motrix is found on PATH (volta)', async () => {
+  it('fails verify (unverifiable) when an unbound install has no motrix on PATH (volta)', async () => {
+    // Unbound manager + nothing on PATH = no evidence the update reached the
+    // install we run. Not a confident success: exit 7, advisory recovery.
     const c = ctx({
       argv1:
         '/Users/x/.volta/tools/image/node_modules/@motrix/cli/dist/bin/motrix.js',
       whichBin: async () => null,
     })
     const r = await runSelfUpdate({}, c)
-    expect(r).toMatchObject({ ok: true, changed: true, method: 'volta' })
-    expect(r.warning).toBeDefined()
+    expect(r).toMatchObject({
+      ok: false,
+      reason: 'verify-failed',
+      exitCode: EXIT.SELF_UPDATE_FAILED,
+      method: 'volta',
+    })
+    expect(r.manualCommand).toBeUndefined()
+    expect(r.message).toContain('not on PATH')
   })
 
   it('updates via bun with the bun installer args', async () => {
+    // Give bun a resolvable PATH bin reporting the target so verify confirms.
     const c = ctx({
       argv1:
         '/Users/x/.bun/install/global/node_modules/@motrix/cli/dist/bin/motrix.js',
-      whichBin: async () => null,
+      whichBin: async () => '/Users/x/.bun/bin/motrix',
+      runCommand: scriptedRun({
+        binVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+      }),
     })
     const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'bun-global' })
     expect(c.runCommand).toHaveBeenCalledWith(
       'bun',
       ['add', '-g', '@motrix/cli@0.3.0'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
   })
 
-  it('verifies pnpm via PATH and warns (succeeds) when motrix is not on PATH yet', async () => {
+  it('verifies pnpm via PATH: a target match on PATH is a confident success', async () => {
     // pnpm is not root-bound, so verify never queries `pnpm root -g` (which can
-    // point at a different pnpm); it checks what `motrix` on PATH reports. When
-    // nothing is on PATH yet (fresh PNPM_HOME not in this shell) that is a
-    // warning-only success, not a failure.
-    const c = ctx({ argv1: PNPM_BIN, whichBin: async () => null })
+    // point at a different pnpm); it checks what `motrix` on PATH reports.
+    const c = ctx({
+      argv1: PNPM_BIN,
+      whichBin: async () => '/Users/x/Library/pnpm/motrix',
+      runCommand: scriptedRun({
+        binVersion: { code: 0, stdout: '0.3.0\n', stderr: '' },
+      }),
+    })
     const r = await runSelfUpdate({}, c)
     expect(r).toMatchObject({ ok: true, changed: true, method: 'pnpm-global' })
-    expect(r.warning).toBeDefined()
+    expect(r.warning).toBeUndefined()
   })
 
   it('fails verify when the installed entry does not run at all', async () => {

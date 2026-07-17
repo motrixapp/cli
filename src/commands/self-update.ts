@@ -75,6 +75,13 @@ export interface SelfUpdateCtx {
  *  the installer legitimately runs through a shell on Windows. */
 const SPEC_RE = /^[A-Za-z0-9._^~*+-]+$/
 
+/** A global install can be slow (network + extraction), so it gets a generous
+ *  bound; a `--version` probe should return near-instantly. Both exist so a
+ *  hung subprocess can't make self-update hang forever (it would otherwise
+ *  never reach the state-observation and recovery branches). */
+const INSTALL_TIMEOUT_MS = 300_000
+const CHECK_TIMEOUT_MS = 15_000
+
 /**
  * `motrix self-update [target]` — pnpm's self-update UX translated to an
  * npm-distributed CLI: detect who installed us, resolve the target to one
@@ -214,17 +221,24 @@ export async function runSelfUpdate(
 
   const inst = await ctx.runCommand(installArgs[0], installArgs.slice(1), {
     cwd: ctx.neutralDir,
+    timeoutMs: INSTALL_TIMEOUT_MS,
   })
-  const rollback = installArgsFor(source.kind, `${OWN_PACKAGE}@${from}`).join(
-    ' '
-  )
+  // A rollback to `from` is only safe to HAND BACK when we bound the install
+  // root (npm): for pnpm/yarn/bun/volta we can't prove `<pm> add -g @from`
+  // targets the tree we run from, so a runnable rollback could downgrade — or
+  // shadow — a different install. When unbound we give advisory prose instead.
+  const rollback =
+    source.kind === 'npm-global' && source.globalRoot
+      ? installArgsFor(source.kind, `${OWN_PACKAGE}@${from}`).join(' ')
+      : null
   if (inst.code !== 0) {
     const output = `${inst.stdout}${inst.stderr}`.trim()
     const eaccesHint = /EACCES|EPERM/.test(inst.stderr)
       ? '\nPermission denied on the global directory. Do NOT use sudo — fix the npm prefix instead: https://docs.npmjs.com/resolving-eacces-permissions-errors-when-installing-packages-globally'
       : ''
-    const exitDesc =
-      inst.code === null
+    const exitDesc = inst.timedOut
+      ? `timed out after ${Math.round(INSTALL_TIMEOUT_MS / 1000)}s`
+      : inst.code === null
         ? `spawn error (${inst.spawnError?.code ?? 'unknown'})`
         : `exit ${inst.code}`
     const prefix = `installer failed (${exitDesc})${output ? `:\n${output}` : ''}${eaccesHint}`
@@ -261,7 +275,10 @@ export async function runSelfUpdate(
       }
     }
     // Indeterminate: could not confirm `from` is still runnable, so the tree
-    // may be partially updated or broken. Point recovery at a rollback.
+    // may be partially updated or broken.
+    const recovery = rollback
+      ? ` Check \`motrix --version\`; to restore ${from}, run: ${rollback}`
+      : ` Check \`motrix --version\` and reinstall ${from} with the package manager you use.`
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
@@ -270,11 +287,10 @@ export async function runSelfUpdate(
       from,
       to,
       method: source.kind,
-      manualCommand: rollback,
+      manualCommand: rollback ?? undefined,
       message:
         `${prefix}\n${OWN_PACKAGE} could not be confirmed afterwards (now reports ` +
-        `${observed ?? 'nothing'}); it may be partially updated. Check ` +
-        `\`motrix --version\`; to restore ${from}, run: ${rollback}`,
+        `${observed ?? 'nothing'}); it may be partially updated.${recovery}`,
     }
   }
 
@@ -282,12 +298,15 @@ export async function runSelfUpdate(
   if (!verified.ok) {
     // The installer exited 0, so the global tree is ALREADY mutated — report
     // that honestly (`changed: true`) rather than implying nothing happened.
-    // Recovery is a deliberate rollback to `from` via the SAME manager, not a
-    // blind re-run of the forward install (which would just reproduce this
-    // unverifiable state). We do NOT auto-rollback: verification can fail on a
-    // perfectly good install (e.g. a stale entry-path assumption), and
-    // downgrading a healthy install — plus a second fallible mutation — is
-    // worse than surfacing the state and the exact command.
+    // We do NOT auto-rollback: verification can fail on a perfectly good
+    // install (e.g. a stale entry-path assumption or a shadow), and downgrading
+    // a healthy install — plus a second fallible mutation — is worse than
+    // surfacing the state. A runnable rollback command is offered only when the
+    // root is bound (npm); otherwise the recovery is advisory (an unbound
+    // rollback could hit a different tree).
+    const recovery = rollback
+      ? ` to restore ${from}, run: ${rollback}`
+      : ` if it still shows ${from}, the update likely reached a different installation — reinstall ${to} with the package manager you use.`
     return {
       ok: false,
       exitCode: EXIT.SELF_UPDATE_FAILED,
@@ -297,11 +316,11 @@ export async function runSelfUpdate(
       to,
       method: source.kind,
       command,
-      manualCommand: rollback,
+      manualCommand: rollback ?? undefined,
       message:
         `${verified.detail}. The installer reported success but the result could ` +
         `not be verified — ${OWN_PACKAGE} may now be at ${to} or in a broken ` +
-        `state. Check \`motrix --version\`; to restore ${from}, run: ${rollback}`,
+        `state. Check \`motrix --version\`;${recovery}`,
     }
   }
 
@@ -336,9 +355,10 @@ interface VerifyOutcome {
  * pnpm with a different global root), so we verify the OUTCOME the user gets:
  * what `motrix` on PATH reports now. A mismatch there is a FAILURE, not a
  * warning — a caller must not read exit 0 when its `motrix` still runs the old
- * version. The one warning-only case is "nothing named `motrix` is on PATH
- * yet" (e.g. a freshly-created PNPM_HOME/volta bin dir not in this shell): we
- * installed successfully but cannot confirm from here.
+ * version. "Nothing named `motrix` on PATH" is treated as UNVERIFIABLE (also a
+ * failure): with an unbound root and no PATH entry we have no evidence the
+ * update reached the install this command was launched from, so we must not
+ * claim success — the message says it is likely fine and how to confirm.
  */
 async function verifyInstall(
   source: InstallSource & { executable: true },
@@ -382,8 +402,8 @@ async function verifyInstall(
   const bin = await ctx.whichBin('motrix')
   if (!bin) {
     return {
-      ok: true,
-      warning: `installed ${expected}, but \`motrix\` is not on PATH in this shell — open a new shell and run \`motrix --version\` to confirm`,
+      ok: false,
+      detail: `installed ${expected}, but could not verify it — \`motrix\` is not on PATH in this shell (open a new shell and run \`motrix --version\`)`,
     }
   }
   const onPath = await runVersion(ctx, bin, ['--version'])
@@ -421,7 +441,10 @@ async function runVersion(
   cmd: string,
   args: string[]
 ): Promise<string | null> {
-  const res = await ctx.runCommand(cmd, args, { cwd: ctx.neutralDir })
+  const res = await ctx.runCommand(cmd, args, {
+    cwd: ctx.neutralDir,
+    timeoutMs: CHECK_TIMEOUT_MS,
+  })
   return res.code === 0 ? res.stdout.trim() : null
 }
 

@@ -139,10 +139,11 @@ function withSlash(dir: string): string {
   return dir.endsWith('/') ? dir : `${dir}/`
 }
 
-/** `npm root -g`, realpath'd; null when npm is unusable or silent. */
+/** `npm root -g`, realpath'd; null when npm is unusable, silent, or slow. */
 async function npmGlobalRoot(ctx: DetectCtx): Promise<string | null> {
   const res = await ctx.runCommand('npm', ['root', '-g'], {
     cwd: ctx.neutralDir,
+    timeoutMs: 15_000,
   })
   if (res.code !== 0) return null
   const raw = res.stdout.trim()

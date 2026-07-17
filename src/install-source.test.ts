@@ -187,11 +187,13 @@ describe('detectInstallSource — executable sources', () => {
       kind: 'npm-global',
       globalRoot: NPM_ROOT,
     })
-    // The probe runs from tmpdir, not the CLI's cwd — a project-local
+    // The probe runs from the neutral dir, not the CLI's cwd — a project-local
     // .npmrc must not be able to skew it.
-    expect(runCommand).toHaveBeenCalledWith('npm', ['root', '-g'], {
-      cwd: '/tmp',
-    })
+    expect(runCommand).toHaveBeenCalledWith(
+      'npm',
+      ['root', '-g'],
+      expect.objectContaining({ cwd: '/tmp' })
+    )
   })
 })
 

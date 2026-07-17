@@ -2,6 +2,10 @@ import { OWN_PACKAGE } from './install-source'
 import type { RunCommand } from './run-command'
 import { pickHighest } from './semver'
 
+/** A registry query should be quick; bound it so a stuck request can't hang
+ *  self-update forever (the installer step gets a longer bound of its own). */
+const VIEW_TIMEOUT_MS = 30_000
+
 export type ResolveOutcome =
   | { ok: true; version: string }
   | { ok: false; reason: 'bad-target' | 'resolve-failed'; message: string }
@@ -29,16 +33,33 @@ export async function resolveTargetVersion(
   ctx: ResolveCtx
 ): Promise<ResolveOutcome> {
   const args = ['view', `${OWN_PACKAGE}@${spec}`, 'version', '--json']
-  let res = await ctx.runCommand('npm', args, { cwd: ctx.neutralDir })
-  if (res.code === null && ctx.allowPnpmFallback) {
-    res = await ctx.runCommand('pnpm', args, { cwd: ctx.neutralDir })
+  let res = await ctx.runCommand('npm', args, {
+    cwd: ctx.neutralDir,
+    timeoutMs: VIEW_TIMEOUT_MS,
+  })
+  // `commandMissing` is normalized in run-command.ts: POSIX spawn ENOENT AND
+  // win32's cmd.exe 9009. The prior `code === null` check missed win32, so a
+  // pnpm-only Windows box never reached this fallback.
+  if (res.commandMissing && ctx.allowPnpmFallback) {
+    res = await ctx.runCommand('pnpm', args, {
+      cwd: ctx.neutralDir,
+      timeoutMs: VIEW_TIMEOUT_MS,
+    })
   }
-  if (res.code === null) {
+  if (res.commandMissing) {
     return {
       ok: false,
       reason: 'resolve-failed',
-      message:
-        'npm is not available to query the registry — install npm or update manually',
+      message: `no package manager available to query the registry (tried npm${
+        ctx.allowPnpmFallback ? ' and pnpm' : ''
+      }) — install one or update manually`,
+    }
+  }
+  if (res.timedOut) {
+    return {
+      ok: false,
+      reason: 'resolve-failed',
+      message: 'registry query timed out — check your network and retry',
     }
   }
   if (res.code !== 0) {

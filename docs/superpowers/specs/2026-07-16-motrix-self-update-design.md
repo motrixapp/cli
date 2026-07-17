@@ -190,13 +190,33 @@ actually runs** — not merely that *some* install somewhere now has the target.
   PATH package manager wrote to — a second pnpm with a different global root
   would pass a fresh `pnpm root -g` check while leaving the running install
   untouched. So verify the **outcome the user gets**: what `motrix` on PATH
-  reports now. Match → success. Mismatch or unrunnable → `SELF_UPDATE_FAILED
-  (7)` (**not** a warning — a caller must not read exit 0 when its `motrix`
-  still runs the old version). The *only* warning-only case is "nothing named
-  `motrix` is on PATH yet" (e.g. a freshly-created PNPM_HOME/volta bin dir not
-  in this shell): installed, but unconfirmable from here.
+  reports now. Match → success. Mismatch, unrunnable, **or not on PATH at all**
+  → `SELF_UPDATE_FAILED (7)`. "Not on PATH" is treated as *unverifiable*, not a
+  warning-only success: with an unbound root and no PATH entry there is no
+  evidence the update reached the install this command was launched from, so we
+  must not report exit 0 — the message says it is likely fine and how to
+  confirm (`motrix --version` in a new shell).
   - We deliberately no longer call `pnpm root -g` at verify time (it can point
     at a different pnpm — the source of the wrong-tree false success).
+- **Recovery commands are bound-only.** A runnable rollback in `manualCommand`
+  is offered **only** for npm (bound root). For pnpm/yarn/bun/volta a rollback
+  `<pm> add -g @from` can't be proven to target the running install (could
+  downgrade or shadow a different tree), so verify/indeterminate failures on
+  those managers give advisory prose and **no** runnable `manualCommand` (same
+  principle as `unknown-install`). Retrying the *forward* install is still
+  offered when the old version is provably intact — the same operation, not a
+  downgrade.
+- **Bounded subprocesses.** Every package-manager call runs under a timeout
+  (~15s for probes/version checks, 30s for the registry query, 300s for the
+  install) and a capped output buffer (tail retained), so a stuck request or
+  pathological output can't hang self-update forever or exhaust memory. An
+  install that times out is handled exactly like any other non-zero exit:
+  observe the actual state and branch (intact / active / indeterminate).
+- **Windows package-manager-missing** is detected cross-platform: a missing
+  binary is a spawn `ENOENT` on POSIX but exits via cmd.exe with code `9009` on
+  Windows. `run-command` normalizes both into a `commandMissing` flag, so the
+  pnpm-only-on-Windows registry fallback actually fires (the old `code === null`
+  check silently missed it).
 - Windows note: the installer rewrites the running command's `.cmd`/`.ps1`
   shims mid-flight. Safe — node already holds the JS in memory — but the
   command prints its result and exits promptly after verification; nothing

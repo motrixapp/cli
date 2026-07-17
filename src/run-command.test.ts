@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeForCmdShell, runCommand } from './run-command'
+import { escapeForCmdShell, isCommandMissing, runCommand } from './run-command'
 
 describe('escapeForCmdShell', () => {
   it('wraps a plain arg in double quotes', () => {
@@ -48,5 +48,59 @@ describe('runCommand', () => {
     const r = await runCommand('motrix-test-no-such-binary-xyz', [])
     expect(r.code).toBe(null)
     expect(r.spawnError).toBeDefined()
+    // A POSIX ENOENT is a missing command; on win32 it surfaces via 9009.
+    if (process.platform !== 'win32') expect(r.commandMissing).toBe(true)
+  })
+
+  it('kills a process that exceeds the timeout and flags timedOut', async () => {
+    const r = await runCommand('node', ['-e', 'setTimeout(() => {}, 10000)'], {
+      timeoutMs: 200,
+    })
+    expect(r.timedOut).toBe(true)
+    // Killed → no clean exit code.
+    expect(r.code).toBe(null)
+  })
+
+  it('caps captured output and flags truncation', async () => {
+    const r = await runCommand(
+      'node',
+      ['-e', 'process.stdout.write("x".repeat(50000))'],
+      { maxBuffer: 1000 }
+    )
+    expect(r.truncated).toBe(true)
+    expect(r.stdout.length).toBeLessThanOrEqual(1000)
+  })
+})
+
+describe('isCommandMissing', () => {
+  it('flags cmd.exe 9009 as a missing command on win32', () => {
+    expect(isCommandMissing(9009, '', 'win32')).toBe(true)
+  })
+
+  it('flags the cmd.exe "is not recognized" phrase on win32', () => {
+    expect(
+      isCommandMissing(
+        1,
+        "'npm' is not recognized as an internal or external command",
+        'win32'
+      )
+    ).toBe(true)
+  })
+
+  it('does NOT flag a real tool error like npm E404 (exit 1, "not found")', () => {
+    // The classifier must be narrow: npm's own "404 Not Found" must not read
+    // as a missing binary, or resolve would wrongly fall back / bail.
+    expect(
+      isCommandMissing(
+        1,
+        'npm error code E404\nnpm error 404 Not Found',
+        'win32'
+      )
+    ).toBe(false)
+  })
+
+  it('is never true on POSIX (missing there is a spawn ENOENT, handled separately)', () => {
+    expect(isCommandMissing(9009, 'is not recognized', 'linux')).toBe(false)
+    expect(isCommandMissing(127, 'command not found', 'darwin')).toBe(false)
   })
 })
