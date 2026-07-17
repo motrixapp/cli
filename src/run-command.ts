@@ -78,28 +78,50 @@ export function escapeCmdArgument(
 }
 
 /**
+ * The JS package managers we invoke by bare name. On Windows they ship as
+ * `.cmd` shims, which cmd.exe re-parses — their arguments need the double
+ * meta-escape (BatBadBut). No other bare name may be treated as a shim:
+ * cmd.exe parses an `.exe` command line only once, so a double-escaped
+ * argument reaches the program with literal carets — `node -e <script>`
+ * breaks outright. (A standalone pnpm.exe invoked as bare `pnpm` still gets
+ * the double escape and its arguments arrive caret-mangled — a pre-existing
+ * limitation, unchanged here, and it fails loudly rather than silently.
+ * Resolving the real extension through PATHEXT, as cross-spawn does, remains
+ * the complete fix.)
+ */
+const BATCH_SHIM_NAMES = new Set([
+  'npm',
+  'npx',
+  'pnpm',
+  'pnpx',
+  'yarn',
+  'corepack',
+])
+
+/**
  * Whether a command, run through cmd.exe, resolves to a `.cmd`/`.bat` shim
- * (which cmd re-parses, requiring double meta-escaping of arguments). The JS
- * package managers (`npm`, `pnpm`, `yarn`) ship as `.cmd` shims on Windows and
- * are passed as bare names; `node`/the resolved bin paths we spawn are `.exe`.
- * Over-including an `.exe` here is harmless for our argument set (none contains
- * a metacharacter once the version spec passes `SPEC_RE`), so a bare name with
- * no extension is conservatively treated as a shim.
+ * (which cmd re-parses, requiring double meta-escaping of arguments). An
+ * explicit `.cmd`/`.bat` path is a shim; a bare name is one only when it is a
+ * known package-manager shim. Paths and extension-bearing names (`node.exe`,
+ * resolved bin paths) are not.
  */
 function looksLikeBatchShim(command: string): boolean {
   if (/\.(?:cmd|bat)$/i.test(command)) return true
-  return !/[\\/]/.test(command) && !/\.[a-z0-9]+$/i.test(command)
+  if (/[\\/]/.test(command) || /\.[a-z0-9]+$/i.test(command)) return false
+  return BATCH_SHIM_NAMES.has(command.toLowerCase())
 }
 
 /**
  * Whether a *completed* process indicates the command was not found. On POSIX
  * a missing binary never reaches here — it fails as a spawn `ENOENT` error
- * (handled separately). On win32 the command runs through cmd.exe, which exits
- * 9009 ("'x' is not recognized as an internal or external command") for a
- * missing command rather than emitting a spawn error. 9009 is the reliable,
- * locale-independent signal; the English phrase is a best-effort backup.
- * Deliberately narrow so a real tool error like npm's `E404 ... not found`
- * (exit 1) is NOT misclassified as a missing command.
+ * (handled separately). On win32 the command runs through cmd.exe, which
+ * prints "'x' is not recognized as an internal or external command" to stderr
+ * and — empirically, under `spawn(..., { shell: true })` — exits 1, not the
+ * documented ERRORLEVEL 9009. The phrase match is therefore the live signal
+ * (English-locale systems; a localized message is missed — accepted
+ * limitation), with 9009 kept as a defensive extra. Deliberately narrow so a
+ * real tool error like npm's `E404 ... not found` (exit 1) is NOT
+ * misclassified as a missing command.
  */
 export function isCommandMissing(
   code: number | null,
