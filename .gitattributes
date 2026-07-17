@@ -1,0 +1,3 @@
+# Biome enforces lf (biome.json formatter.lineEnding); force lf on checkout
+# everywhere so windows checkouts (core.autocrlf=true) don't fail lint.
+* text=auto eol=lf

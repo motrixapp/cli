@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [20, 22, 24]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # pnpm 11 cannot run on node 20 (it requires node >= 22.13), so the
+      # node 20 jobs need the standalone build, which bundles its own
+      # runtime while project scripts still run on the matrix node. Both
+      # pnpm/action-setup standalone mode and `npm i -g @pnpm/exe` are
+      # broken for 11.13.0 — the @pnpm/* platform packages on npm were
+      # published without their binary (pnpm/action-setup#277) — so fetch
+      # the standalone binary straight from the GitHub release, versioned
+      # by package.json's packageManager field.
+      - name: Setup pnpm (standalone binary)
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').packageManager.split('@').pop()")"
+          case "${RUNNER_OS}-${RUNNER_ARCH}" in
+            Linux-X64)     asset="pnpm-linux-x64.tar.gz" ;;
+            Linux-ARM64)   asset="pnpm-linux-arm64.tar.gz" ;;
+            macOS-ARM64)   asset="pnpm-darwin-arm64.tar.gz" ;;
+            Windows-X64)   asset="pnpm-win32-x64.zip" ;;
+            Windows-ARM64) asset="pnpm-win32-arm64.zip" ;;
+            *) echo "no pnpm standalone asset for ${RUNNER_OS}-${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          dest="${RUNNER_TEMP}/pnpm-standalone"
+          mkdir -p "$dest"
+          cd "$dest"
+          curl -fsSL --retry 3 -o "$asset" \
+            "https://github.com/pnpm/pnpm/releases/download/v${version}/${asset}"
+          if [[ "$asset" == *.zip ]]; then
+            powershell.exe -NoProfile -Command "Expand-Archive -Path '${asset}' -DestinationPath '.' -Force"
+          else
+            tar -xzf "$asset"
+            chmod +x pnpm
+          fi
+          rm "$asset"
+          ./pnpm --version
+          echo "$dest" >> "$GITHUB_PATH"
+
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

@@ -71,12 +71,19 @@ describe('runCommand', () => {
     expect(r).toMatchObject({ code: 3, stderr: 'bad' })
   })
 
-  it('reports a spawn failure as code null with the error attached', async () => {
+  it('reports a missing binary through the platform signal', async () => {
     const r = await runCommand('motrix-test-no-such-binary-xyz', [])
-    expect(r.code).toBe(null)
-    expect(r.spawnError).toBeDefined()
-    // A POSIX ENOENT is a missing command; on win32 it surfaces via 9009.
-    if (process.platform !== 'win32') expect(r.commandMissing).toBe(true)
+    expect(r.commandMissing).toBe(true)
+    if (process.platform === 'win32') {
+      // Through cmd.exe a missing command is not a spawn failure: cmd runs,
+      // prints "... is not recognized ..." and exits non-zero.
+      expect(r.code).not.toBe(0)
+      expect(r.code).not.toBe(null)
+    } else {
+      // POSIX: the spawn itself fails with ENOENT.
+      expect(r.code).toBe(null)
+      expect(r.spawnError).toBeDefined()
+    }
   })
 
   it('kills a process that exceeds the timeout and flags timedOut', async () => {
@@ -84,8 +91,14 @@ describe('runCommand', () => {
       timeoutMs: 200,
     })
     expect(r.timedOut).toBe(true)
-    // Killed → no clean exit code.
-    expect(r.code).toBe(null)
+    if (process.platform === 'win32') {
+      // taskkill /f terminates the cmd.exe wrapper with a non-zero exit code.
+      expect(r.code).not.toBe(0)
+      expect(r.code).not.toBe(null)
+    } else {
+      // Killed by signal → no clean exit code.
+      expect(r.code).toBe(null)
+    }
   })
 
   it('caps captured output and flags truncation', async () => {
