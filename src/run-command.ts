@@ -25,18 +25,70 @@ export type RunCommand = (
 const DEFAULT_MAX_BUFFER = 1_000_000
 
 /**
- * Quote a single argument for cmd.exe. `spawn(..., { shell: true })` on
- * win32 hands `cmd+args` to `cmd.exe /d /s /c`, which joins them with plain
- * spaces and applies no quoting of its own. Two consequences: an arg with an
- * embedded space (e.g. a path under `C:\Users\John Smith\...`) splits into
- * multiple argv entries, and `^` — cmd.exe's escape character — is consumed
- * before the target program ever sees it (so `^0.2.0` becomes `0.2.0`).
- * Wrapping in double quotes fixes both: cmd.exe keeps a quoted string as one
- * argument, and treats `^` literally while inside quotes. Embedded `"` are
- * doubled, cmd.exe's own escape for a literal quote inside a quoted string.
+ * cmd.exe metacharacters. Anything here is interpreted by the command
+ * processor before the target program's argv parser runs, so each must be
+ * caret-escaped when the string passes through `cmd.exe /c`. Mirrors
+ * cross-spawn's set (the reference implementation behind CVE-2024-27980,
+ * "BatBadBut").
  */
-export function escapeForCmdShell(arg: string): string {
-  return `"${arg.replaceAll('"', '""')}"`
+const CMD_META = /([()\][%!^"`<>&|;, *?])/g
+
+/**
+ * Escape a *command* (the executable token) for `cmd.exe /c`. cmd.exe reads
+ * the command before the child's argv parser does, so only the shell-meta
+ * layer applies — caret-escape metacharacters (including spaces, so a path
+ * like `C:\Program Files\nodejs\node.exe` survives). No surrounding quotes:
+ * that's the cross-spawn convention, and quoting the command would itself need
+ * meta-escaping. Verbatim from cross-spawn's `escapeCommand`.
+ */
+export function escapeCmdCommand(command: string): string {
+  return command.replace(CMD_META, '^$1')
+}
+
+/**
+ * Escape an *argument* for `cmd.exe /c`, the two-layer Windows escaping
+ * ported verbatim from cross-spawn (the algorithm from qntm.org/cmd):
+ *
+ * 1. CommandLineToArgvW layer — double every run of backslashes that precedes
+ *    a `"` (and the trailing run, which becomes adjacent to the wrapping
+ *    quote), escape the `"` itself, then wrap the whole arg in double quotes.
+ *    A bare `\"` or a trailing `\` would otherwise be mis-parsed.
+ * 2. cmd.exe layer — caret-escape every metacharacter (the wrapping quotes
+ *    included; under `cmd /c` a `^"` collapses back to a literal `"` for the
+ *    argv parser). When the ultimate target is a `.cmd`/`.bat` shim (npm,
+ *    pnpm, yarn on Windows), cmd.exe re-parses the arguments a second time, so
+ *    the meta layer is applied twice — this is the BatBadBut mitigation.
+ *
+ * This composes with Node's `spawn(..., { shell: true })`, which on win32
+ * builds exactly `cmd.exe /d /s /c "<file> <args…>"` with
+ * windowsVerbatimArguments — the same invocation cross-spawn constructs by
+ * hand — so identically-escaped tokens yield an identical command line.
+ */
+export function escapeCmdArgument(
+  argument: string,
+  doubleEscapeMetaChars = false
+): string {
+  let arg = `${argument}`
+  arg = arg.replace(/(\\*)"/g, '$1$1\\"')
+  arg = arg.replace(/(\\*)$/, '$1$1')
+  arg = `"${arg}"`
+  arg = arg.replace(CMD_META, '^$1')
+  if (doubleEscapeMetaChars) arg = arg.replace(CMD_META, '^$1')
+  return arg
+}
+
+/**
+ * Whether a command, run through cmd.exe, resolves to a `.cmd`/`.bat` shim
+ * (which cmd re-parses, requiring double meta-escaping of arguments). The JS
+ * package managers (`npm`, `pnpm`, `yarn`) ship as `.cmd` shims on Windows and
+ * are passed as bare names; `node`/the resolved bin paths we spawn are `.exe`.
+ * Over-including an `.exe` here is harmless for our argument set (none contains
+ * a metacharacter once the version spec passes `SPEC_RE`), so a bare name with
+ * no extension is conservatively treated as a shim.
+ */
+function looksLikeBatchShim(command: string): boolean {
+  if (/\.(?:cmd|bat)$/i.test(command)) return true
+  return !/[\\/]/.test(command) && !/\.[a-z0-9]+$/i.test(command)
 }
 
 /**
@@ -67,12 +119,13 @@ export function isCommandMissing(
  * piped stdio reads as a hang — captured output is printed only on failure.
  * On win32 the package-manager entry points are `.cmd` shims, which Node
  * refuses to spawn without a shell (EINVAL, CVE-2024-27980), so a shell is
- * used there; `cmd` and every element of `args` are cmd.exe-quoted
- * (`escapeForCmdShell`) before being handed to `spawn` so that paths with
- * spaces (including `cmd` itself — e.g. the default Windows install path
- * `C:\Program Files\nodejs\node.exe`) and `^`-containing ranges survive
- * cmd.exe's own parsing. A shell also means spawn failures surface as a
- * non-zero exit instead of `code: null` on win32.
+ * used there; the command and every argument are cmd.exe-escaped
+ * (`escapeCmdCommand` / `escapeCmdArgument`, the cross-spawn two-layer
+ * algorithm) before being handed to `spawn`, so paths with spaces (including
+ * the default Windows node path `C:\Program Files\nodejs\node.exe`), `^`-based
+ * ranges, and shell metacharacters all survive cmd.exe's parsing — including
+ * the second parse that `.cmd`/`.bat` shims trigger (BatBadBut). A shell also
+ * means spawn failures surface as a non-zero exit instead of `code: null`.
  *
  * `opts.timeoutMs` bounds the run: on expiry the process (tree, on win32) is
  * killed and the result carries `timedOut: true` — a stuck registry query or
@@ -82,9 +135,10 @@ export function isCommandMissing(
 export const runCommand: RunCommand = (cmd, args, opts) =>
   new Promise((resolve) => {
     const useShell = process.platform === 'win32'
+    const doubleMeta = useShell && looksLikeBatchShim(cmd)
     const child = spawn(
-      useShell ? escapeForCmdShell(cmd) : cmd,
-      useShell ? args.map(escapeForCmdShell) : args,
+      useShell ? escapeCmdCommand(cmd) : cmd,
+      useShell ? args.map((a) => escapeCmdArgument(a, doubleMeta)) : args,
       {
         cwd: opts?.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -154,8 +208,12 @@ export const runCommand: RunCommand = (cmd, args, opts) =>
 function killTree(pid: number | undefined): void {
   if (pid == null) return
   if (process.platform === 'win32') {
+    // Resolve taskkill by absolute path (from %SystemRoot%) rather than
+    // trusting PATH — avoids a PATH-planted `taskkill` and works when PATH is
+    // minimal. Matches execa's hardening.
+    const taskkill = `${process.env.SystemRoot ?? 'C:\\Windows'}\\System32\\taskkill.exe`
     try {
-      spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' })
+      spawn(taskkill, ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' })
     } catch {
       // best effort
     }
