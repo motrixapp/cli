@@ -1,18 +1,28 @@
 import { spawn } from 'node:child_process'
 
 export interface RunResult {
-  /** Exit code; null when the binary could not be spawned (e.g. ENOENT). */
+  /** Exit code; null when the binary could not be spawned or was killed. */
   code: number | null
   stdout: string
   stderr: string
   spawnError?: NodeJS.ErrnoException
+  /** The named binary does not exist (POSIX ENOENT, or win32 cmd.exe 9009). */
+  commandMissing?: boolean
+  /** The process was killed after exceeding `opts.timeoutMs`. */
+  timedOut?: boolean
+  /** Captured output hit `opts.maxBuffer`; only the tail is retained. */
+  truncated?: boolean
 }
 
 export type RunCommand = (
   cmd: string,
   args: string[],
-  opts?: { cwd?: string }
+  opts?: { cwd?: string; timeoutMs?: number; maxBuffer?: number }
 ) => Promise<RunResult>
+
+/** Per-stream capture cap (bytes). A pathological installer must not be able
+ *  to OOM the process; we keep the tail, where errors surface. */
+const DEFAULT_MAX_BUFFER = 1_000_000
 
 /**
  * Quote a single argument for cmd.exe. `spawn(..., { shell: true })` on
@@ -30,6 +40,28 @@ export function escapeForCmdShell(arg: string): string {
 }
 
 /**
+ * Whether a *completed* process indicates the command was not found. On POSIX
+ * a missing binary never reaches here — it fails as a spawn `ENOENT` error
+ * (handled separately). On win32 the command runs through cmd.exe, which exits
+ * 9009 ("'x' is not recognized as an internal or external command") for a
+ * missing command rather than emitting a spawn error. 9009 is the reliable,
+ * locale-independent signal; the English phrase is a best-effort backup.
+ * Deliberately narrow so a real tool error like npm's `E404 ... not found`
+ * (exit 1) is NOT misclassified as a missing command.
+ */
+export function isCommandMissing(
+  code: number | null,
+  stderr: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  if (platform !== 'win32') return false
+  return (
+    code === 9009 ||
+    /is not recognized as an internal or external command/i.test(stderr)
+  )
+}
+
+/**
  * Buffered, non-interactive command runner. stdin is ignored and output is
  * captured, not streamed: npm can prompt mid-install, and a hidden prompt on
  * piped stdio reads as a hang — captured output is printed only on failure.
@@ -41,6 +73,11 @@ export function escapeForCmdShell(arg: string): string {
  * `C:\Program Files\nodejs\node.exe`) and `^`-containing ranges survive
  * cmd.exe's own parsing. A shell also means spawn failures surface as a
  * non-zero exit instead of `code: null` on win32.
+ *
+ * `opts.timeoutMs` bounds the run: on expiry the process (tree, on win32) is
+ * killed and the result carries `timedOut: true` — a stuck registry query or
+ * install can never hang self-update forever. `opts.maxBuffer` caps each
+ * captured stream (tail retained) so pathological output can't exhaust memory.
  */
 export const runCommand: RunCommand = (cmd, args, opts) =>
   new Promise((resolve) => {
@@ -54,17 +91,87 @@ export const runCommand: RunCommand = (cmd, args, opts) =>
         shell: useShell,
       }
     )
+    const cap = opts?.maxBuffer ?? DEFAULT_MAX_BUFFER
     let stdout = ''
     let stderr = ''
-    child.stdout?.on('data', (d: Buffer) => {
-      stdout += d.toString()
-    })
-    child.stderr?.on('data', (d: Buffer) => {
-      stderr += d.toString()
-    })
+    let truncated = false
+    const append = (chunk: string, which: 'out' | 'err') => {
+      if (which === 'out') {
+        stdout += chunk
+        if (stdout.length > cap) {
+          stdout = stdout.slice(-cap)
+          truncated = true
+        }
+      } else {
+        stderr += chunk
+        if (stderr.length > cap) {
+          stderr = stderr.slice(-cap)
+          truncated = true
+        }
+      }
+    }
+    child.stdout?.on('data', (d: Buffer) => append(d.toString(), 'out'))
+    child.stderr?.on('data', (d: Buffer) => append(d.toString(), 'err'))
+
+    let timedOut = false
+    let timer: NodeJS.Timeout | undefined
+    if (opts?.timeoutMs && opts.timeoutMs > 0) {
+      timer = setTimeout(() => {
+        timedOut = true
+        killTree(child.pid)
+      }, opts.timeoutMs)
+      timer.unref?.()
+    }
+    const done = (r: RunResult) => {
+      if (timer) clearTimeout(timer)
+      resolve({ ...r, truncated: truncated || undefined })
+    }
+
     child.on('error', (spawnError: NodeJS.ErrnoException) => {
-      resolve({ code: null, stdout, stderr, spawnError })
+      done({
+        code: null,
+        stdout,
+        stderr,
+        spawnError,
+        commandMissing: spawnError.code === 'ENOENT' || undefined,
+      })
     })
     // 'close' (not 'exit') so the stdio streams are fully flushed first.
-    child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.on('close', (code) => {
+      done({
+        code,
+        stdout,
+        stderr,
+        timedOut: timedOut || undefined,
+        commandMissing: isCommandMissing(code, stderr) || undefined,
+      })
+    })
   })
+
+/** Best-effort kill of a child and its descendants. On win32 the child is a
+ *  cmd.exe wrapper whose grandchildren (npm/node) would survive a plain kill,
+ *  so use `taskkill /t`; on POSIX SIGTERM then a delayed SIGKILL. */
+function killTree(pid: number | undefined): void {
+  if (pid == null) return
+  if (process.platform === 'win32') {
+    try {
+      spawn('taskkill', ['/pid', String(pid), '/t', '/f'], { stdio: 'ignore' })
+    } catch {
+      // best effort
+    }
+    return
+  }
+  try {
+    process.kill(pid, 'SIGTERM')
+  } catch {
+    return
+  }
+  const grace = setTimeout(() => {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // already gone
+    }
+  }, 2000)
+  grace.unref?.()
+}

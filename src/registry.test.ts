@@ -24,7 +24,7 @@ describe('resolveTargetVersion', () => {
     expect(c.runCommand).toHaveBeenCalledWith(
       'npm',
       ['view', '@motrix/cli@latest', 'version', '--json'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
   })
 
@@ -57,6 +57,8 @@ describe('resolveTargetVersion', () => {
   })
 
   it('falls back to pnpm view when npm is missing and fallback is allowed', async () => {
+    // run-command normalizes both POSIX ENOENT and win32 cmd.exe 9009 into
+    // `commandMissing`; the fallback keys on that, not on `code === null`.
     const run = vi
       .fn()
       .mockResolvedValueOnce({
@@ -64,6 +66,7 @@ describe('resolveTargetVersion', () => {
         stdout: '',
         stderr: '',
         spawnError: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
+        commandMissing: true,
       })
       .mockResolvedValueOnce({ code: 0, stdout: '"0.3.0"\n', stderr: '' })
     const r = await resolveTargetVersion('latest', {
@@ -76,16 +79,51 @@ describe('resolveTargetVersion', () => {
       2,
       'pnpm',
       ['view', '@motrix/cli@latest', 'version', '--json'],
-      { cwd: '/tmp' }
+      expect.objectContaining({ cwd: '/tmp' })
     )
+  })
+
+  it('falls back to pnpm on a win32 "command not found" (commandMissing, exit 9009)', async () => {
+    // On Windows a missing npm exits via cmd.exe (code 9009), not a spawn
+    // error; run-command flags it as commandMissing so the fallback still fires.
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({
+        code: 9009,
+        stdout: '',
+        stderr: "'npm' is not recognized as an internal or external command",
+        commandMissing: true,
+      })
+      .mockResolvedValueOnce({ code: 0, stdout: '"0.3.0"\n', stderr: '' })
+    const r = await resolveTargetVersion('latest', {
+      runCommand: run,
+      neutralDir: '/tmp',
+      allowPnpmFallback: true,
+    })
+    expect(r).toEqual({ ok: true, version: '0.3.0' })
+    expect(run).toHaveBeenCalledTimes(2)
   })
 
   it('reports npm-missing as resolve-failed when no fallback is allowed', async () => {
     const r = await resolveTargetVersion(
       'latest',
-      ctx({ code: null, spawnError: Object.assign(new Error('x'), {}) })
+      ctx({
+        code: null,
+        spawnError: Object.assign(new Error('x'), {}),
+        commandMissing: true,
+      })
     )
     expect(r).toMatchObject({ ok: false, reason: 'resolve-failed' })
+    if (!r.ok) expect(r.message).toContain('no package manager')
+  })
+
+  it('maps a timed-out registry query to resolve-failed', async () => {
+    const r = await resolveTargetVersion(
+      'latest',
+      ctx({ code: null, timedOut: true })
+    )
+    expect(r).toMatchObject({ ok: false, reason: 'resolve-failed' })
+    if (!r.ok) expect(r.message).toContain('timed out')
   })
 
   it('treats unparseable output as resolve-failed', async () => {

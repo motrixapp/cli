@@ -168,12 +168,26 @@ sudo**。
 - **pnpm / yarn / bun / volta**(未绑定 root):无法证明 PATH 上的包管理器写到
   了哪棵树——另一个 global root 不同的 pnpm 会让一次新鲜的 `pnpm root -g`
   检查通过、却把运行的那份安装原封不动。故验证**用户实际得到的结果**:PATH 上
-  的 `motrix` 现在报什么版本。匹配 → 成功。不匹配或无法运行 →
-  `SELF_UPDATE_FAILED (7)`(**不是**警告——当用户的 `motrix` 仍跑旧版时,调用方
-  绝不能读到 exit 0)。唯一仅警告的情形是"PATH 上还没有 `motrix`"(如新建的
-  PNPM_HOME/volta bin 目录尚未进入当前 shell):已安装,但此处无法确认。
+  的 `motrix` 现在报什么版本。匹配 → 成功。不匹配、无法运行、**或 PATH 上根本
+  没有** → `SELF_UPDATE_FAILED (7)`。"PATH 上没有"按*不可验证*处理,而非仅警告
+  的成功:未绑定 root 且无 PATH 条目时,没有任何证据表明更新落到了本命令启动的
+  那份安装,故绝不报 exit 0——message 说明它多半没问题以及如何确认(在新 shell
+  里跑 `motrix --version`)。
   - 我们刻意不再在验证时调用 `pnpm root -g`(它可能指向另一个 pnpm——正是
     错误树误报成功的根源)。
+- **恢复命令仅在已绑定时给出。** 只有 npm(绑定 root)才在 `manualCommand` 里
+  给可运行的回滚。对 pnpm/yarn/bun/volta,回滚 `<pm> add -g @from` 无法证明会
+  作用到运行的那份安装(可能降级或遮蔽另一棵树),故这些管理器的验证/不确定失败
+  只给建议性文字、**不带**可运行 `manualCommand`(与 `unknown-install` 同理)。
+  当旧版本可证明完好时仍给出重试*正向*安装的命令——那是同一操作,不是降级。
+- **子进程有界。** 每次包管理器调用都带超时(探测/版本检查约 15s、registry 查询
+  30s、安装 300s)和输出上限(保留尾部),卡住的请求或异常输出无法让 self-update
+  永久挂起或耗尽内存。安装超时与其他非零退出同等处理:观测实际状态再分支
+  (完好/已生效/不确定)。
+- **Windows 上"包管理器缺失"跨平台识别**:缺失的二进制在 POSIX 上是 spawn
+  `ENOENT`,在 Windows 上则经 cmd.exe 以 `9009` 退出。`run-command` 把两者归一
+  为 `commandMissing` 标志,于是 pnpm-only 的 Windows registry 回退才会真正触发
+  (旧的 `code === null` 检查会静默漏掉)。
 - Windows 备注:安装器会中途改写正在运行的命令的 `.cmd`/`.ps1` shim。这是
   安全的——node 已把 JS 载入内存——但命令在验证后立即打印结果并退出,
   安装之后不再运行其他逻辑。
