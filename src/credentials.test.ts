@@ -9,16 +9,18 @@ import {
   tokenForEndpoint,
 } from './credentials'
 
+// Expectations are join()-built: credentialsFilePath joins with the HOST
+// separator, so literal `/` strings would fail on a Windows host.
 describe('credentialsFilePath', () => {
   it('lands under ~/.config/motrix by default', () => {
     expect(credentialsFilePath({}, '/home/me')).toBe(
-      '/home/me/.config/motrix/credentials.json'
+      join('/home/me', '.config', 'motrix', 'credentials.json')
     )
   })
 
   it('honors XDG_CONFIG_HOME', () => {
     expect(credentialsFilePath({ XDG_CONFIG_HOME: '/cfg' }, '/home/me')).toBe(
-      '/cfg/motrix/credentials.json'
+      join('/cfg', 'motrix', 'credentials.json')
     )
   })
 })
@@ -50,11 +52,16 @@ describe('credentials store', () => {
     expect(await tokenForEndpoint('http://127.0.0.1:16801', path)).toBe('tok-a')
   })
 
-  it('writes the file at mode 0600', async () => {
-    await saveToken('http://x', { token: 't' }, path)
-    const st = await stat(path)
-    expect(st.mode & 0o777).toBe(0o600)
-  })
+  // Windows has no POSIX permission bits (stat.mode reports 0o666); the
+  // chmod call is still exercised there as a no-op by the other tests.
+  it.skipIf(process.platform === 'win32')(
+    'writes the file at mode 0600',
+    async () => {
+      await saveToken('http://x', { token: 't' }, path)
+      const st = await stat(path)
+      expect(st.mode & 0o777).toBe(0o600)
+    }
+  )
 
   it('normalizes a trailing slash in the endpoint key', async () => {
     await saveToken('http://nas.local:16801/', { token: 'tok-b' }, path)

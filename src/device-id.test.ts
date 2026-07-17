@@ -40,11 +40,16 @@ describe('device-id store', () => {
     expect(a).not.toBe(b)
   })
 
-  it('writes the store file with 0600 permissions', async () => {
-    await ensureDeviceId('http://127.0.0.1:1', path)
-    const mode = (await stat(path)).mode & 0o777
-    expect(mode).toBe(0o600)
-  })
+  // Windows has no POSIX permission bits (stat.mode reports 0o666); the
+  // mode-setting write path is still exercised there by the other tests.
+  it.skipIf(process.platform === 'win32')(
+    'writes the store file with 0600 permissions',
+    async () => {
+      await ensureDeviceId('http://127.0.0.1:1', path)
+      const mode = (await stat(path)).mode & 0o777
+      expect(mode).toBe(0o600)
+    }
+  )
 
   async function seed(obj: unknown): Promise<void> {
     await mkdir(dirname(path), { recursive: true })

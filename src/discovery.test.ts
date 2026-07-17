@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   type EndpointFile,
@@ -17,34 +18,46 @@ const file: EndpointFile = {
   writtenAt: 1,
 }
 
+// Expectations are join()-built: the code under test joins with the HOST
+// separator even when simulating another platform, so literal `/` strings
+// would fail on a Windows host.
 describe('userDataDir', () => {
   it('resolves the macOS Application Support path', () => {
     expect(userDataDir('darwin', {}, '/Users/me')).toBe(
-      '/Users/me/Library/Application Support/Motrix'
+      join('/Users/me', 'Library', 'Application Support', 'Motrix')
     )
   })
 
   it('resolves the Linux XDG config path', () => {
-    expect(userDataDir('linux', {}, '/home/me')).toBe('/home/me/.config/Motrix')
+    expect(userDataDir('linux', {}, '/home/me')).toBe(
+      join('/home/me', '.config', 'Motrix')
+    )
   })
 
   it('honors XDG_CONFIG_HOME on Linux', () => {
     expect(userDataDir('linux', { XDG_CONFIG_HOME: '/cfg' }, '/home/me')).toBe(
-      '/cfg/Motrix'
+      join('/cfg', 'Motrix')
     )
   })
 
   it('resolves the Windows APPDATA path', () => {
     expect(
       userDataDir('win32', { APPDATA: 'C:\\Users\\me\\AppData\\Roaming' }, 'C:')
-    ).toContain('Motrix')
+    ).toBe(join('C:\\Users\\me\\AppData\\Roaming', 'Motrix'))
   })
 })
 
 describe('endpointFilePath', () => {
   it('lands under <userData>/bridge/endpoint.json', () => {
     expect(endpointFilePath('darwin', {}, '/Users/me')).toBe(
-      '/Users/me/Library/Application Support/Motrix/bridge/endpoint.json'
+      join(
+        '/Users/me',
+        'Library',
+        'Application Support',
+        'Motrix',
+        'bridge',
+        'endpoint.json'
+      )
     )
   })
 })

@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { EXIT } from '../errors'
 import type { RunResult } from '../run-command'
@@ -235,7 +236,11 @@ describe('runSelfUpdate — install and verify', () => {
     )
     expect(c.runCommand).toHaveBeenCalledWith(
       'node',
-      [`${NPM_ROOT}/@motrix/cli/dist/bin/motrix.js`, '--version'],
+      // join()-built: the code joins the entry with the HOST separator.
+      [
+        join(NPM_ROOT, '@motrix', 'cli', 'dist', 'bin', 'motrix.js'),
+        '--version',
+      ],
       expect.objectContaining({ cwd: '/tmp' })
     )
   })
