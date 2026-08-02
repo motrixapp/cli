@@ -1,6 +1,6 @@
 {
   "name": "@motrix/cli",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Command-line client for the Motrix download manager — speaks MDXP (JSON-RPC 2.0) to a running Motrix, for humans and AI agents.",
   "license": "MIT",
   "author": "Motrix",
@@ -28,7 +28,7 @@
     "motrix": "dist/bin/motrix.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "files": [
     "dist",

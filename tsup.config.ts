@@ -8,7 +8,7 @@ export default defineConfig({
   dts: false,
   splitting: false,
   clean: true,
-  target: 'node20',
+  target: 'node22',
   platform: 'node',
   // @motrix/mdxp is published on npm, but we inline it into the built CLI
   // (a devDependency, not a runtime one) so the artifact stays self-contained

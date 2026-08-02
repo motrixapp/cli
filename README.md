@@ -14,7 +14,7 @@ the actual downloading is performed by Motrix.
 
 ## Requirements
 
-- **Node.js ≥ 20**
+- **Node.js ≥ 22**
 - A reachable, running **Motrix** instance (desktop app or server).
 
 ## Installation
