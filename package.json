@@ -54,7 +54,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.1",
-    "@motrix/mdxp": "^0.3.0",
+    "@motrix/mdxp": "^0.5.0",
     "@types/node": "^24",
     "tsup": "^8",
     "typescript": "^5.6",

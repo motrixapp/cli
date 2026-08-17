@@ -16,8 +16,8 @@ importers:
         specifier: ^2.5.1
         version: 2.5.4
       '@motrix/mdxp':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: ^0.5.0
+        version: 0.5.0
       '@types/node':
         specifier: ^24
         version: 24.13.3
@@ -415,8 +415,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@motrix/mdxp@0.3.0':
-    resolution: {integrity: sha512-ZvyqNmQ6GMzJF+9PjWtMG/r9tqHO19rergOx/7YuADY+V9s/ejlC2lDd0ARefjtKf0vrZhadzCUpxRWpORSGZw==}
+  '@motrix/mdxp@0.5.0':
+    resolution: {integrity: sha512-DImm/kxsH43PI2IV/p9jbJnlxe+We0wD45eRPuACSCUFKVgUfDeVpjqK76bXK0umO245Z7bjxXr8qm4AcS/ESA==}
 
   '@rollup/rollup-android-arm-eabi@4.62.2':
     resolution: {integrity: sha512-6o7ZLZK+BeenkZCFNDXqpbjw9bD6nuWonvS/lwQJp7NoVVxm6p3qE7qQ5jGuBjiFsgvqjD8mZAU5oWxTmbOeOg==}
@@ -1177,7 +1177,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@motrix/mdxp@0.3.0':
+  '@motrix/mdxp@0.5.0':
     dependencies:
       vscode-jsonrpc: 9.0.1
       zod: 4.4.3
