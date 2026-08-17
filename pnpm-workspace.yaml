@@ -10,4 +10,4 @@ allowBuilds:
 # from any local minimumReleaseAge supply-chain gate. Same stance as the Motrix
 # app workspace. No-op on machines/CI without such a policy.
 minimumReleaseAgeExclude:
-  - '@motrix/mdxp@0.3.0'
+  - '@motrix/mdxp@0.3.0 || 0.5.0'

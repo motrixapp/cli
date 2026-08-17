@@ -64,7 +64,11 @@ describe('runAdd — url', () => {
     )
     const body = sent(fetchImpl)
     expect(body.method).toBe('download/add')
-    expect(body.params).toEqual({
+    const { idempotencyKey, ...params } = body.params
+    expect(idempotencyKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    )
+    expect(params).toEqual({
       kind: 'url',
       saveDir: '/dl',
       uris: ['https://example.com/f.iso'],
@@ -113,7 +117,11 @@ describe('runAdd — magnet', () => {
       { saveDir: '/dl', magnet: 'magnet:?xt=urn:btih:abc', select: '0,2' },
       { endpoint, fetchImpl, stdout: cap.stdout }
     )
-    expect(sent(fetchImpl).params).toEqual({
+    const { idempotencyKey, ...params } = sent(fetchImpl).params
+    expect(idempotencyKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    )
+    expect(params).toEqual({
       kind: 'magnet',
       saveDir: '/dl',
       uri: 'magnet:?xt=urn:btih:abc',
@@ -134,7 +142,10 @@ describe('runAdd — torrent', () => {
       readFile
     )
     expect(readFile).toHaveBeenCalledWith('/tmp/x.torrent')
-    const params = sent(fetchImpl).params
+    const { idempotencyKey, ...params } = sent(fetchImpl).params
+    expect(idempotencyKey).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+    )
     expect(params.kind).toBe('torrent')
     expect(params.base64).toBe(Buffer.from('torrentbytes').toString('base64'))
   })
@@ -192,5 +203,62 @@ describe('lifecycle commands', () => {
     const fetchImpl = fakeFetch({ ok: true })
     await runRemove('task-1', {}, { endpoint, fetchImpl, stdout: cap.stdout })
     expect(sent(fetchImpl).params).toEqual({ taskId: 'task-1' })
+  })
+})
+
+describe('runAdd — idempotent retry', () => {
+  const okResponse = {
+    status: 200,
+    json: async () => ({ jsonrpc: '2.0', id: 1, result: createdTask }),
+  } as Response
+
+  it('retries once with the same key when the bridge is unreachable', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValue(okResponse)
+    const cap = capture(true)
+    await runAdd(
+      ['https://example.com/f.iso'],
+      { saveDir: '/dl' },
+      { endpoint, fetchImpl, stdout: cap.stdout }
+    )
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const k1 = JSON.parse(fetchImpl.mock.calls[0][1].body).params.idempotencyKey
+    const k2 = JSON.parse(fetchImpl.mock.calls[1][1].body).params.idempotencyKey
+    expect(k1).toBe(k2)
+  })
+
+  it('gives up after a single retry when the network stays down', async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError('fetch failed'))
+    const cap = capture(true)
+    await expect(
+      runAdd(
+        ['https://example.com/f.iso'],
+        { saveDir: '/dl' },
+        { endpoint, fetchImpl, stdout: cap.stdout }
+      )
+    ).rejects.toMatchObject({ exitCode: EXIT.NETWORK })
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+  })
+
+  it('never retries a JSON-RPC error response', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32602, message: 'bad params' },
+      }),
+    } as Response)
+    const cap = capture(true)
+    await expect(
+      runAdd(
+        ['https://example.com/f.iso'],
+        { saveDir: '/dl' },
+        { endpoint, fetchImpl, stdout: cap.stdout }
+      )
+    ).rejects.toMatchObject({ exitCode: EXIT.SERVER })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
   })
 })

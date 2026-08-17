@@ -108,6 +108,26 @@ describe('rpcCall', () => {
     expect((err.data as { code: number }).code).toBe(-32601)
   })
 
+  it('turns JSON-RPC -32602 (invalid params) into a friendly upgrade hint', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      fakeResponse(200, {
+        jsonrpc: '2.0',
+        id: 1,
+        error: { code: -32602, message: 'Invalid params' },
+      })
+    )
+    const err = (await rpcCall(endpoint, 'download/add', {}, fetchImpl).catch(
+      (e) => e
+    )) as CliError
+    expect(err).toBeInstanceOf(CliError)
+    expect(err.exitCode).toBe(EXIT.SERVER)
+    // Actionable, not just the raw "Invalid params": points at a possible
+    // protocol drift (older Motrix rejecting a newer CLI field).
+    expect(err.message).toContain('older than this CLI')
+    // Machine consumers (--json) can still branch on the JSON-RPC code.
+    expect((err.data as { code: number }).code).toBe(-32602)
+  })
+
   it('turns HTTP 404 into a friendly no-bridge / upgrade hint', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(fakeResponse(404, 'Not Found'))
     const err = (await rpcCall(endpoint, 'task/list', {}, fetchImpl).catch(
