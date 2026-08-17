@@ -79,6 +79,17 @@ export async function rpcCall<T = unknown>(
         body.error
       )
     }
+    // `-32602 Invalid params` can mean genuinely bad input or protocol drift
+    // (this CLI sending fields an older Motrix does not know, e.g.
+    // idempotencyKey). Keep the server's message but add the drift fix, since
+    // the CLI pre-validates the common input mistakes client-side.
+    if (body.error.code === -32602) {
+      throw new CliError(
+        EXIT.SERVER,
+        `${body.error.message} — if these parameters look correct, your Motrix app may be older than this CLI. Update Motrix, or install a matching @motrix/cli`,
+        body.error
+      )
+    }
     throw new CliError(EXIT.SERVER, body.error.message, body.error)
   }
   return body.result as T

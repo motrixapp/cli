@@ -64,7 +64,7 @@ describe('runAdd — url', () => {
     )
     const body = sent(fetchImpl)
     expect(body.method).toBe('download/add')
-    const { idempotencyKey, ...params } = sent(fetchImpl).params
+    const { idempotencyKey, ...params } = body.params
     expect(idempotencyKey).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     )
